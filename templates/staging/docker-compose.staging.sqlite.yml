@@ -1,0 +1,26 @@
+# Staging template for SQLite-backed projects (omnilingo, etc.)
+# Copy to your project root as docker-compose.staging.yml and customize.
+# SQLite DB is ephemeral — fresh on every deploy, migrations run on container start.
+
+services:
+  app-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}-staging
+    environment:
+      - NODE_ENV=staging
+      - PORT=7848
+    volumes:
+      - staging-data:/data
+    networks:
+      - caddy_net
+    restart: unless-stopped
+
+volumes:
+  staging-data:
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_net

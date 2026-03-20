@@ -1,0 +1,14 @@
+[Unit]
+Description=forge-api — pipeline project registry and orchestrator trigger
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/nexus/infra/dev-pipeline/api
+ExecStart=%h/.local/bin/uv run uvicorn api:app --host 127.0.0.1 --port 8773
+Restart=on-failure
+RestartSec=5
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

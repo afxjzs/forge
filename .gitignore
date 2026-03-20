@@ -1,0 +1,19 @@
+# Secrets
+.env
+.forge-bot-token
+*.token
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Sessions & runtime state
+.sessions.json
+/projects/
+
+# Logs
+*.log
+
+# OS
+.DS_Store

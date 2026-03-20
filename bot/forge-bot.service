@@ -1,0 +1,14 @@
+[Unit]
+Description=forge-bot — Standalone Telegram bot for forge pipeline
+After=network.target forge-api.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/nexus/infra/dev-pipeline/bot
+ExecStart=%h/.local/bin/uv run python bot.py
+Restart=on-failure
+RestartSec=5
+Environment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

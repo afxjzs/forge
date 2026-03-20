@@ -1,0 +1,51 @@
+# {{PROJECT_NAME}}
+
+## Problem
+
+{{PROBLEM_STATEMENT}}
+
+## Stack
+
+{{STACK}}
+
+## Commands
+
+```bash
+# Development
+{{DEV_COMMAND}}
+
+# Build
+{{BUILD_COMMAND}}
+
+# Test
+{{TEST_COMMAND}}
+
+# Lint
+{{LINT_COMMAND}}
+```
+
+## Conventions
+
+{{CONVENTIONS}}
+
+## Known Footguns
+
+<!-- Populated by agents as they discover issues. Do not delete entries. -->
+
+## Context Files
+
+| File | Purpose |
+|------|---------|
+| `spec/MVP.md` | Full MVP spec |
+| `spec/BACKLOG.md` | Prioritized feature backlog |
+| `.agent/CONTEXT.md` | Current project state (maintained by Orchestrator) |
+| `.agent/ERRORS.md` | Error catalog with prevention rules |
+| `.agent/DECISIONS.md` | Architecture decision records |
+| `.agent/tasks/` | Task queue (Ralph Loop) |
+
+## forge Pipeline
+
+This project is managed by the forge agentic pipeline.
+- Edit `.agent/STEERING.md` to redirect the Orchestrator mid-run
+- Check `.agent/LOG.md` for activity history
+- Check `.agent/scores/` for task quality metrics

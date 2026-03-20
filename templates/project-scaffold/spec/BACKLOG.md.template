@@ -1,0 +1,22 @@
+# {{PROJECT_NAME}} — Feature Backlog
+
+Prioritized list. Top = next to build. Move items up/down to reprioritize.
+PM maintains this. Orchestrator reads it to generate task queues.
+
+---
+
+## Priority 1 (MVP — must ship)
+
+{{MVP_FEATURES}}
+
+## Priority 2 (Fast follow — ship soon after MVP)
+
+{{P2_FEATURES}}
+
+## Priority 3 (Nice to have)
+
+{{P3_FEATURES}}
+
+## Icebox (Maybe someday)
+
+<!-- Features parked here are not forgotten, just deprioritized -->

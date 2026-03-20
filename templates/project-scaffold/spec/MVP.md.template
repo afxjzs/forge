@@ -1,0 +1,41 @@
+# {{PROJECT_NAME}} — MVP Spec
+
+**Author:** Project PM (forge pipeline)
+**Date:** {{DATE}}
+**Status:** draft | approved
+
+---
+
+## Problem Statement
+
+{{PROBLEM_STATEMENT}}
+
+## Target User
+
+{{TARGET_USER}}
+
+## MVP Scope
+
+What v1 includes:
+{{MVP_FEATURES}}
+
+## Anti-Scope (Explicitly NOT in v1)
+
+{{ANTI_SCOPE}}
+
+## Success Criteria
+
+How we know v1 is done:
+{{SUCCESS_CRITERIA}}
+
+## Stack
+
+{{STACK}}
+
+## Constraints
+
+{{CONSTRAINTS}}
+
+## Open Questions
+
+{{OPEN_QUESTIONS}}

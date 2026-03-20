@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPTS_DIR="$(dirname "$(realpath "$0")")"
+
+usage() {
+    cat <<'EOF'
+forge — agentic development pipeline
+
+Usage: forge <command> [args]
+
+Commands:
+  board <project> [task-id]    Kanban task board (+ optional task detail)
+  status [project]             Project status (all or one)
+  init <name> <stack>          Create new project (nextjs, fastapi, react-spa, python-cli, typescript-lib)
+  adopt <path> [--stack X]     Onboard existing project into forge
+  promote <name> <stage>       Move project stage (inception, planning, active, paused, shipped)
+  plan <project-path>          Generate task queue from feature specs
+  run <project-path>           Start the Ralph Loop (spawn workers)
+  security <project-path>      Run security scan
+  deploy <project> production   Deploy main to production via docker-ops
+  deploy <project> <pr#>       Deploy PR branch to staging
+  deploy <project> teardown    Stop staging
+  deploy <project>             Show staging status
+  help                         Show this message
+
+Examples:
+  forge board omnilingo
+  forge board omnilingo task-003
+  forge status
+  forge status arby
+  forge adopt ~/nexus/projects/my-app --stack fastapi
+  forge init cool-idea nextjs
+  forge plan ~/nexus/projects/arby
+  forge deploy omnilingo production
+  forge deploy omnilingo 3
+  forge deploy omnilingo teardown
+EOF
+    exit 0
+}
+
+[[ $# -eq 0 ]] && usage
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    board)          exec "$SCRIPTS_DIR/forge-board.sh" "$@" ;;
+    status)         exec "$SCRIPTS_DIR/forge-status.sh" "$@" ;;
+    init)           exec "$SCRIPTS_DIR/forge-init.sh" "$@" ;;
+    adopt)          exec "$SCRIPTS_DIR/forge-adopt.sh" "$@" ;;
+    promote)        exec "$SCRIPTS_DIR/forge-promote.sh" "$@" ;;
+    plan)           exec "$SCRIPTS_DIR/forge-plan.sh" "$@" ;;
+    run)            exec "$SCRIPTS_DIR/forge-run.sh" "$@" ;;
+    security)       exec "$SCRIPTS_DIR/forge-security-scan.sh" "$@" ;;
+    deploy)         exec "$SCRIPTS_DIR/forge-deploy.sh" "$@" ;;
+    help|--help|-h) usage ;;
+    *)
+        echo "Unknown command: $COMMAND"
+        echo "Run 'forge' for usage."
+        exit 1
+        ;;
+esac

@@ -1,0 +1,19 @@
+# Staging template for Postgres-backed projects (fastapi, etc.)
+# Copy to your project root as docker-compose.staging.yml and customize.
+
+services:
+  app-staging:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}-staging
+    environment:
+      - DATABASE_URL=postgresql://${PROJECT_NAME}_staging:staging_pass@postgres:5432/${PROJECT_NAME}_staging
+    networks:
+      - caddy_net
+    restart: unless-stopped
+
+networks:
+  caddy_net:
+    external: true
+    name: caddy_net
