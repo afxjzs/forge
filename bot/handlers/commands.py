@@ -39,21 +39,23 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await _reply(update, """[forge] Commands:
 
+Modes (modal sessions):
+/plan <project>       — Enter [P] Planning mode
+/testing <project>    — Enter [T] Testing mode (live notes)
+/review <project>     — Enter [R] Review mode
+/done                 — Exit current mode
+
+Actions (work in any mode):
 /status [project]     — Project status (all or one)
 /board <project>      — Kanban task board
 /deploy <project>     — Deploy staging branch
 /ship <project>       — Promote staging → production
 /kick <project>       — Start the orchestrator
-/plan <project>       — Generate task queue
 /adopt <path>         — Onboard existing project
 /newproject           — Start new project interview
 /projects             — List all projects
 /staging <project>    — What's on staging
 /e2e <project>        — Run E2E tests
-/feature <project>    — Add feature (follow-up prompts)
-/testing <project>    — Start live notes session
-/done                 — End live notes session
-/research <project> <topic> — Research a topic
 /help                 — This message""")
 
 
@@ -142,19 +144,6 @@ async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await _error_reply(update, e)
 
-
-async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _check_auth(update):
-        return
-    project = _get_project(context)
-    if not project:
-        await _reply(update, "[forge] Usage: /plan <project>")
-        return
-    try:
-        data = await api.plan(project)
-        await _reply(update, f"[{project}] Planner started. Check back for task queue.")
-    except Exception as e:
-        await _error_reply(update, e)
 
 
 async def cmd_adopt(update: Update, context: ContextTypes.DEFAULT_TYPE):
