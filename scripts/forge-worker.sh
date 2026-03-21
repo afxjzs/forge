@@ -302,10 +302,25 @@ Closes #$ISSUE_NUMBER
     fi
 fi
 
-# --- Cleanup worktree ---
+# --- Cleanup worktree (always, on success or failure) ---
 cd "$PROJECT_PATH"
-if ! git worktree remove "$WORKTREE_DIR" --force 2>/dev/null; then
-    echo "Warning: Failed to remove worktree." >&2
+echo "Cleaning up worktree..."
+
+# Try normal removal first
+if git worktree remove "$WORKTREE_DIR" --force 2>/dev/null; then
+    echo "  Worktree removed cleanly."
+else
+    echo "  git worktree remove failed, attempting force cleanup..." >&2
+    # If git removal fails, force-delete the directory
+    if [[ -d "$WORKTREE_DIR" ]]; then
+        rm -rf "$WORKTREE_DIR"
+        echo "  Worktree directory forcefully removed."
+    fi
+fi
+
+# Prune any stale branches (in case of abrupt failures)
+if ! git branch -D "$BRANCH_NAME" 2>/dev/null; then
+    true  # Branch may already be deleted, that's OK
 fi
 
 echo ""
