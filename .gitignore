@@ -21,3 +21,4 @@ __pycache__/
 # forge pipeline (optional — scores are ephemeral)
 .agent/scores/
 .agent/tasks/
+.worktrees/
