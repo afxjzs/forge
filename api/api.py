@@ -135,8 +135,9 @@ def read_task_counts(project_path: Path) -> dict:
         # If we got any GitHub data, return it
         if any(counts.values()):
             return counts
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("forge-api").warning(f"read_task_counts: GitHub Issues lookup failed for {project_path.name}: {e}")
 
     # Fallback to local task files
     tasks_dir = project_path / ".agent" / "tasks"
@@ -311,8 +312,10 @@ def list_projects():
                             "next_action": next_action["action"],
                             "message": next_action["message"],
                         })
-                    except Exception:
-                        projects.append({"name": item.name})
+                    except Exception as e:
+                        import logging
+                        logging.getLogger("forge-api").warning(f"list_projects: failed to get status for {item.name}: {e}")
+                        projects.append({"name": item.name, "error": str(e)})
                 else:
                     projects.append({"name": item.name})
         if projects:
@@ -466,31 +469,22 @@ def trigger_orchestrator(name: str):
     if stage != "active":
         raise HTTPException(status_code=400, detail=f"Project must be in 'active' stage. Currently: '{stage}'")
 
-    # Check GitHub Issues for open tasks (primary) OR local task files (fallback)
+    # Check GitHub Issues for open tasks
+    import logging
+    logger = logging.getLogger("forge-api")
+    gh_env = {**os.environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + os.environ.get("PATH", "")}
     open_issues = 0
     try:
         result = subprocess.run(
             ["gh", "issue", "list", "--label", "task", "--state", "open", "--json", "number", "--jq", "length"],
-            capture_output=True, text=True, timeout=15, cwd=str(project_path),
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            capture_output=True, text=True, timeout=15, cwd=str(project_path), env=gh_env,
         )
         if result.returncode == 0:
             open_issues = int(result.stdout.strip() or "0")
-    except Exception:
-        pass
-
-    # Also check for open issues without the task label (bugs, etc.)
-    if open_issues == 0:
-        try:
-            result = subprocess.run(
-                ["gh", "issue", "list", "--state", "open", "--json", "number", "--jq", "length"],
-                capture_output=True, text=True, timeout=15, cwd=str(project_path),
-                env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
-            )
-            if result.returncode == 0:
-                open_issues = int(result.stdout.strip() or "0")
-        except Exception:
-            pass
+        else:
+            logger.error(f"trigger_orchestrator: gh issue list failed: {result.stderr.strip()}")
+    except Exception as e:
+        logger.error(f"trigger_orchestrator: gh command failed: {e}")
 
     # Fallback to local task files
     if open_issues == 0:

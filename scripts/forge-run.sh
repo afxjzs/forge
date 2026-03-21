@@ -8,8 +8,11 @@ set -euo pipefail
 #
 # Usage: forge-run.sh <project-path> [--dry-run]
 
-FORGE_ROOT="$HOME/nexus/infra/dev-pipeline"
+FORGE_ROOT="${FORGE_ROOT:-$HOME/nexus/infra/dev-pipeline}"
 SCRIPTS_DIR="$FORGE_ROOT/scripts"
+
+# Load env vars if running outside systemd
+[[ -f "$FORGE_ROOT/.env" ]] && set -a && source "$FORGE_ROOT/.env" && set +a
 MAX_CONSECUTIVE_FAILURES=3
 
 usage() {
@@ -31,6 +34,18 @@ notify() {
         echo "ERROR: Telegram notification FAILED for message: $msg" >&2
         echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | NOTIFICATION_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "**Message that failed to send:** $msg" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
+    fi
+}
+
+# --- Helper: edit GitHub issue labels (logs failures instead of swallowing) ---
+gh_label() {
+    local issue="$1"
+    shift
+    if ! gh issue edit "$issue" "$@" 2>&1; then
+        echo "WARNING: gh issue edit #$issue $* failed" >&2
+        echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | GH_LABEL_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        echo "**Failed command:** gh issue edit #$issue $*" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
     fi
 }
@@ -175,7 +190,7 @@ while true; do
     fi
 
     # 3. Mark issue as in-progress
-    gh issue edit "$issue_number" --add-label "in-progress" 2>/dev/null || true
+    gh_label "$issue_number" --add-label "in-progress"
 
     # 4. Spawn worker
     echo "Spawning worker..."
@@ -189,7 +204,7 @@ while true; do
 
     if [[ $worker_exit -eq 99 ]]; then
         echo "AUTH FAILURE: Claude CLI is not authenticated."
-        gh issue edit "$issue_number" --remove-label "in-progress" 2>/dev/null || true
+        gh_label "$issue_number" --remove-label "in-progress"
         notify "[$PROJECT_NAME] Pipeline STOPPED — Claude is not logged in. Run '/login' to re-authenticate."
         break
     fi
@@ -199,7 +214,7 @@ while true; do
         consecutive_failures=0
 
         # Remove in-progress label (PR will close the issue)
-        gh issue edit "$issue_number" --remove-label "in-progress" 2>/dev/null || true
+        gh_label "$issue_number" --remove-label "in-progress"
 
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"done\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
             >> "$PROJECT_PATH/.agent/LOG.md"
@@ -207,7 +222,7 @@ while true; do
     elif [[ $worker_exit -eq 2 ]]; then
         echo "Worker flagged issue for review."
         consecutive_failures=$((consecutive_failures + 1))
-        gh issue edit "$issue_number" --remove-label "in-progress" --add-label "needs-review" 2>/dev/null || true
+        gh_label "$issue_number" --remove-label "in-progress" --add-label "needs-review"
         notify "[$PROJECT_NAME] Issue #$issue_number needs review — worker flagged it."
 
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"needs_review\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
@@ -216,7 +231,7 @@ while true; do
     else
         echo "Worker failed (exit code: $worker_exit)."
         consecutive_failures=$((consecutive_failures + 1))
-        gh issue edit "$issue_number" --remove-label "in-progress" --add-label "needs-review" 2>/dev/null || true
+        gh_label "$issue_number" --remove-label "in-progress" --add-label "needs-review"
         notify "[$PROJECT_NAME] Issue #$issue_number failed (exit $worker_exit)."
 
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"failed\",\"model\":\"$model\",\"timestamp\":\"$timestamp\",\"exit_code\":$worker_exit}" \

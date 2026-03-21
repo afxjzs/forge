@@ -138,7 +138,18 @@ echo ""
 # Parse JSON and create issues, tracking created issue numbers for dependency mapping
 CREATED_ISSUES=()
 
-TASK_COUNT=$(echo "$TASK_JSON" | python3 -c "import sys,json; print(len(json.loads(sys.stdin.read())))")
+TASK_COUNT=$(echo "$TASK_JSON" | python3 -c "
+import sys, json
+try:
+    tasks = json.loads(sys.stdin.read())
+    if not isinstance(tasks, list):
+        print('Error: Claude returned non-array JSON', file=sys.stderr)
+        sys.exit(1)
+    print(len(tasks))
+except json.JSONDecodeError as e:
+    print(f'Error: Failed to parse Claude response as JSON: {e}', file=sys.stderr)
+    sys.exit(1)
+") || { echo "Error: Could not parse task JSON from Claude response"; exit 1; }
 echo "Tasks to create: $TASK_COUNT"
 echo ""
 

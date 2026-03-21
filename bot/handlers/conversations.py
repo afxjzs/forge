@@ -1,9 +1,12 @@
 """LLM-powered conversation handlers: interviews, live notes, research."""
 
 import json
+import logging
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger("forge-bot")
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -175,8 +178,8 @@ def _get_open_issues(project_path: str) -> list[dict]:
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"_get_open_issues: gh command failed: {e}")
     return []
 
 
@@ -188,8 +191,11 @@ def _comment_on_issue(project_path: str, issue_number: int, comment: str) -> boo
             capture_output=True, text=True, timeout=15, cwd=project_path,
             env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
         )
+        if result.returncode != 0:
+            logger.error(f"_comment_on_issue: gh comment on #{issue_number} failed: {result.stderr.strip()}")
         return result.returncode == 0
-    except Exception:
+    except Exception as e:
+        logger.error(f"_comment_on_issue: gh command failed: {e}")
         return False
 
 
@@ -203,7 +209,8 @@ async def handle_live_note(update: Update, session: Session):
 
     try:
         result = await classify_note(note, session.project_name, existing_issues)
-    except Exception:
+    except Exception as e:
+        logger.error(f"classify_note failed: {e} — creating issue with needs-triage tag")
         result = {"action": "create", "category": "ux", "summary": f"[needs-triage] {note[:100]}", "duplicate_of": None, "comment": None}
 
     action = result.get("action", "create")

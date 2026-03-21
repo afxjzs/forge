@@ -90,7 +90,9 @@ echo ""
 
 # --- Clean previous artifacts (preserve directory inode for Docker bind mount) ---
 mkdir -p "$ARTIFACTS_DIR"
-rm -rf "${ARTIFACTS_DIR:?}"/* "${ARTIFACTS_DIR}"/.[!.]* 2>/dev/null || true
+if ! rm -rf "${ARTIFACTS_DIR:?}"/* "${ARTIFACTS_DIR}"/.[!.]* 2>&1; then
+    echo "WARNING: Failed to clean previous artifacts — results may include stale data" >&2
+fi
 
 # --- Run Playwright ---
 export E2E_BASE_URL="$STAGING_URL"

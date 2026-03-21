@@ -14,8 +14,11 @@ set -euo pipefail
 #   2  = needs_review (worker flagged for human review)
 #   99 = auth failure (Claude not logged in)
 
-FORGE_ROOT="$HOME/nexus/infra/dev-pipeline"
+FORGE_ROOT="${FORGE_ROOT:-$HOME/nexus/infra/dev-pipeline}"
 SCRIPTS_DIR="$FORGE_ROOT/scripts"
+
+# Load env vars if running outside systemd
+[[ -f "$FORGE_ROOT/.env" ]] && set -a && source "$FORGE_ROOT/.env" && set +a
 WORKER_PROMPT="$FORGE_ROOT/agents/worker/AGENT.md"
 export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
 
@@ -215,7 +218,17 @@ Closes #$ISSUE_NUMBER
             CI_PASSED=false
 
             while [[ $WAITED -lt $MAX_WAIT ]]; do
-                CHECK_STATUS=$(gh pr checks "$PR_NUMBER" 2>&1) || true
+                CHECK_STATUS=$(gh pr checks "$PR_NUMBER" 2>&1)
+                GH_EXIT=$?
+
+                if [[ $GH_EXIT -ne 0 ]]; then
+                    echo "WARNING: gh pr checks failed (exit $GH_EXIT): $CHECK_STATUS"
+                    # Don't interpret error messages as CI status — just wait and retry
+                    sleep 15
+                    WAITED=$((WAITED + 15))
+                    echo "  ...retrying ($WAITED/${MAX_WAIT}s)"
+                    continue
+                fi
 
                 if echo "$CHECK_STATUS" | grep -q "fail"; then
                     echo "CI FAILED. PR not merged."

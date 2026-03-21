@@ -18,7 +18,10 @@ set -euo pipefail
 #   - For Postgres: uses <project>_staging database
 #   - For SQLite: fresh file each deploy
 
-FORGE_ROOT="$HOME/nexus/infra/dev-pipeline"
+FORGE_ROOT="${FORGE_ROOT:-$HOME/nexus/infra/dev-pipeline}"
+
+# Load env vars if running outside systemd
+[[ -f "$FORGE_ROOT/.env" ]] && set -a && source "$FORGE_ROOT/.env" && set +a
 PROJECTS_DIR="$FORGE_ROOT/projects"
 STAGES=("inception" "planning" "active" "paused" "shipped")
 
@@ -90,7 +93,9 @@ if [[ "$ACTION" == "teardown" ]]; then
 
     if [[ -f "$STAGING_COMPOSE" ]]; then
         cd "$PROJECT_PATH"
-        docker compose -f docker-compose.staging.yml down -v 2>&1 || true
+        if ! docker compose -f docker-compose.staging.yml down -v 2>&1; then
+            echo "ERROR: docker compose down failed. Containers may still be running." >&2
+        fi
     fi
 
     # Clean up staging state
@@ -176,7 +181,9 @@ fi
 
 # --- Tear down existing staging if running ---
 echo "Stopping existing staging (if any)..."
-docker compose -f docker-compose.staging.yml down -v 2>&1 || true
+if ! docker compose -f docker-compose.staging.yml down -v 2>&1; then
+    echo "WARNING: docker compose down failed — old containers may still be running" >&2
+fi
 
 # --- Build and start staging from staging branch ---
 echo ""
@@ -225,8 +232,8 @@ if [[ -x "$SMOKE_TEST" ]]; then
 
     if [[ $SMOKE_EXIT -ne 0 ]]; then
         echo ""
-        echo "WARNING: Smoke tests FAILED on staging."
-        echo "Staging is deployed but has issues. Do NOT promote to production."
+        echo "ERROR: Smoke tests FAILED on staging. Do NOT promote to production."
+        "$FORGE_ROOT/scripts/forge-notify.sh" "[$PROJECT_NAME] Smoke tests FAILED on staging. Do NOT promote to production." 2>&1 || echo "WARNING: notification failed" >&2
     fi
 else
     echo ""
@@ -246,8 +253,11 @@ if [[ -x "$E2E_SCRIPT" ]] && [[ -d "$PROJECT_PATH/tests/e2e" ]]; then
 
     if [[ $E2E_EXIT -ne 0 ]]; then
         echo ""
-        echo "WARNING: E2E tests FAILED on staging."
-        # Notification already sent by forge-e2e.sh
+        echo "ERROR: E2E tests FAILED on staging."
+        # forge-e2e.sh sends its own notification, but log the failure clearly
+        echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | E2E_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        echo "**E2E tests failed on staging deploy.**" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
     fi
 else
     echo ""
