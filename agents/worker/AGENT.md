@@ -52,6 +52,28 @@ Use conventional commit prefixes: `feat`, `fix`, `refactor`, `test`, `docs`, `ch
 
 ---
 
+## PR Body Convention
+
+All worker-created PRs MUST use the **`Closes #N`** keyword in the PR body to enable GitHub's auto-close feature when the PR is merged.
+
+**Format:**
+```
+## Summary
+
+Closes #<issue-number>
+
+[issue body content]
+```
+
+This ensures:
+- The PR automatically closes the issue upon merge
+- GitHub links the PR to the issue for traceability
+- No manual issue-closing is required
+
+**Invalid keywords:** Do not use `Implements`, `Fixes`, `References`, or other keywords — only `Closes`.
+
+---
+
 ## LOG.md Entry Format (JSONL, append-only)
 
 ```json

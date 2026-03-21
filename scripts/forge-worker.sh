@@ -175,7 +175,7 @@ if $COMMITTED; then
 
         PR_BODY="## Summary
 
-Implements #$ISSUE_NUMBER
+Closes #$ISSUE_NUMBER
 
 $ISSUE_BODY
 
