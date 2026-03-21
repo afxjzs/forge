@@ -254,16 +254,21 @@ Closes #$ISSUE_NUMBER
 
             if $CI_PASSED; then
                 echo "CI passed. Auto-merging to staging..."
-                gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1 || {
-                    echo "Warning: Auto-merge failed."
-                }
+                if gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1; then
+                    notify "[$PROJECT_NAME] PR #$PR_NUMBER merged to staging — $ISSUE_TITLE"
+                else
+                    echo "ERROR: Auto-merge failed for PR #$PR_NUMBER" >&2
+                    notify "[$PROJECT_NAME] PR #$PR_NUMBER merge FAILED — needs manual merge"
+                fi
 
                 # Trigger staging deploy
                 echo "Triggering staging deploy..."
-                curl -s -X POST "http://127.0.0.1:8773/projects/$PROJECT_NAME/deploy" \
+                if ! curl -s -X POST "http://127.0.0.1:8773/projects/$PROJECT_NAME/deploy" \
                     -H "Content-Type: application/json" \
                     -d '{"environment":"staging"}' \
-                    2>&1 || echo "Warning: Staging deploy trigger failed."
+                    2>&1; then
+                    echo "ERROR: Staging deploy trigger failed" >&2
+                fi
 
                 FINAL_STATUS="done"
             elif [[ $WAITED -ge $MAX_WAIT ]]; then

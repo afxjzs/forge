@@ -216,6 +216,8 @@ while true; do
         # Remove in-progress label (PR will close the issue)
         gh_label "$issue_number" --remove-label "in-progress"
 
+        notify "[$PROJECT_NAME] ✓ #$issue_number done — $issue_title"
+
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"done\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
             >> "$PROJECT_PATH/.agent/LOG.md"
 
