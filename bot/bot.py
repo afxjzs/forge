@@ -15,11 +15,12 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from config import BOT_TOKEN, NOTIFY_PORT
 from handlers.commands import (
     cmd_help, cmd_projects, cmd_status, cmd_board,
-    cmd_deploy, cmd_ship, cmd_kick, cmd_plan,
+    cmd_deploy, cmd_ship, cmd_kick,
     cmd_adopt, cmd_staging, cmd_e2e,
 )
 from handlers.conversations import (
-    start_new_project, start_live_notes, end_live_notes, route_message,
+    start_new_project, cmd_plan_mode, cmd_testing_mode, cmd_review_mode,
+    cmd_done, route_message,
 )
 from notify_endpoint import notify_app
 
@@ -55,7 +56,13 @@ def main():
     # Build Telegram bot
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Deterministic command handlers
+    # Modal session commands (mode entry/exit)
+    application.add_handler(CommandHandler("plan", cmd_plan_mode))
+    application.add_handler(CommandHandler("testing", cmd_testing_mode))
+    application.add_handler(CommandHandler("review", cmd_review_mode))
+    application.add_handler(CommandHandler("done", cmd_done))
+
+    # Deterministic command handlers (work in any mode)
     application.add_handler(CommandHandler("start", cmd_help))
     application.add_handler(CommandHandler("help", cmd_help))
     application.add_handler(CommandHandler("projects", cmd_projects))
@@ -64,20 +71,17 @@ def main():
     application.add_handler(CommandHandler("deploy", cmd_deploy))
     application.add_handler(CommandHandler("ship", cmd_ship))
     application.add_handler(CommandHandler("kick", cmd_kick))
-    application.add_handler(CommandHandler("plan", cmd_plan))
     application.add_handler(CommandHandler("adopt", cmd_adopt))
     application.add_handler(CommandHandler("staging", cmd_staging))
     application.add_handler(CommandHandler("e2e", cmd_e2e))
 
-    # LLM-powered conversation handlers
+    # New project interview (runs in default mode)
     application.add_handler(CommandHandler("newproject", start_new_project))
-    application.add_handler(CommandHandler("testing", start_live_notes))
-    application.add_handler(CommandHandler("done", end_live_notes))
 
-    # Non-command messages → session router
+    # Non-command messages → modal session router
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, route_message))
 
-    log.info("forge-bot starting. Polling for Telegram messages...")
+    log.info("forge-bot starting (modal sessions enabled). Polling for Telegram messages...")
     application.run_polling(drop_pending_updates=True)
 
 
