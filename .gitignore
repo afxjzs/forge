@@ -17,3 +17,7 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# forge pipeline (optional — scores are ephemeral)
+.agent/scores/
+.agent/tasks/

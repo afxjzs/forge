@@ -127,6 +127,49 @@ task_model() {
     esac
 }
 
+# --- Helper: cleanup stale worktrees from crashed workers ---
+cleanup_stale_worktrees() {
+    local worktree_dir="$PROJECT_PATH/.worktrees"
+    [[ ! -d "$worktree_dir" ]] && return 0
+
+    cd "$PROJECT_PATH"
+
+    # Find all worktree directories
+    for wt in "$worktree_dir"/issue-*; do
+        [[ ! -d "$wt" ]] && continue
+
+        local issue_num=$(basename "$wt" | sed 's/^issue-//')
+        local branch_name="issue/$issue_num"
+
+        # Try to remove stale worktree
+        if ! git worktree remove "$wt" --force 2>/dev/null; then
+            rm -rf "$wt" 2>/dev/null || true
+            echo "  Cleaned stale worktree: $wt"
+        fi
+    done
+}
+
+# --- Helper: prune orphaned branches (issue/* branches for closed issues) ---
+prune_orphaned_branches() {
+    cd "$PROJECT_PATH"
+
+    # Get all local issue/* branches
+    local branches=$(git branch | grep -oP '^\s+issue/\K\d+' || true)
+    [[ -z "$branches" ]] && return 0
+
+    for issue_num in $branches; do
+        # Check if issue is closed
+        local state=$(gh issue view "$issue_num" --json state -q .state 2>/dev/null || echo "UNKNOWN")
+
+        if [[ "$state" == "CLOSED" ]]; then
+            local branch_name="issue/$issue_num"
+            echo "  Pruning closed issue branch: $branch_name"
+            git branch -D "$branch_name" 2>/dev/null || true
+            git push origin --delete "$branch_name" 2>/dev/null || true
+        fi
+    done
+}
+
 # --- Pre-flight: verify Claude CLI is authenticated ---
 echo "Checking Claude authentication..."
 AUTH_CHECK=$(claude -p "echo ok" 2>&1) || true
@@ -147,7 +190,6 @@ echo "  Checking for stale worktrees..."
 if [[ -d "$PROJECT_PATH/.worktrees" ]]; then
     for wt_dir in "$PROJECT_PATH"/.worktrees/issue-*; do
         if [[ -d "$wt_dir" ]]; then
-            # Check if this worktree is registered in git
             if ! git worktree list --porcelain 2>/dev/null | grep -q "$(basename "$wt_dir")"; then
                 echo "    Removing stale worktree: $(basename "$wt_dir")"
                 rm -rf "$wt_dir"
@@ -155,14 +197,13 @@ if [[ -d "$PROJECT_PATH/.worktrees" ]]; then
         fi
     done
 fi
+git worktree prune 2>/dev/null
 
 # Clean up branches for closed issues
 echo "  Checking for orphaned issue branches..."
 open_issues=$(gh issue list --state open --json number --jq '.[].number' 2>/dev/null || echo "")
 
-# Check remote issue/* branches
-remote_branches=$(git branch -r 2>/dev/null | grep "origin/issue/" | sed 's|.*/||' | xargs || true)
-for branch in $remote_branches; do
+for branch in $(git branch -r 2>/dev/null | grep "origin/issue/" | sed 's|.*/||' | xargs || true); do
     issue_num="${branch#issue/}"
     if ! echo "$open_issues" | grep -q "^$issue_num$"; then
         echo "    Pruning closed issue branch: $branch"
@@ -170,7 +211,6 @@ for branch in $remote_branches; do
     fi
 done
 
-# Check local issue/* branches
 for branch in $(git branch 2>/dev/null | grep "issue/" | sed 's/^[* ] //' | xargs || true); do
     issue_num="${branch#issue/}"
     if ! echo "$open_issues" | grep -q "^$issue_num$"; then
