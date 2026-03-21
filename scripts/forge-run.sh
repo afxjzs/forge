@@ -55,11 +55,11 @@ get_next_issue() {
     local issues
     issues=$(gh issue list --label task --state open --json number,title,labels,body --limit 50 2>/dev/null) || { echo ""; return; }
 
-    # Pick the highest priority unblocked issue
-    python3 -c "
+    # Pick the highest priority unblocked issue (pipe JSON via stdin to avoid quoting issues)
+    echo "$issues" | python3 -c "
 import json, sys
 
-issues = json.loads('''$issues''')
+issues = json.loads(sys.stdin.read())
 if not issues:
     sys.exit(0)
 
@@ -73,13 +73,11 @@ def priority(issue):
 
 def is_blocked(issue):
     body = issue.get('body', '') or ''
-    # Check for 'Blocked by #N' where that issue is still open
     import re
     blocked_refs = re.findall(r'Blocked by #(\d+)', body, re.IGNORECASE)
     for ref in blocked_refs:
-        # Check if blocking issue is still open
         for other in issues:
-            if other['number'] == int(ref) and True:  # it's in open issues = still open
+            if other['number'] == int(ref):
                 return True
     return False
 
@@ -101,7 +99,7 @@ if candidates:
         'complexity': complexity(best),
         'priority': priority(best),
     }))
-" 2>/dev/null
+"
 }
 
 # --- Helper: determine model from complexity ---
