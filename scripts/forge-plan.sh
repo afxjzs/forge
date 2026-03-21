@@ -53,6 +53,9 @@ echo ""
 echo "Phase 1: Generating task specs from feature specs..."
 echo ""
 
+# Unset so Claude Code uses OAuth, not the bot's API key
+unset ANTHROPIC_API_KEY
+
 claude \
     --model claude-opus-4-6 \
     --append-system-prompt "$(cat "$ORCHESTRATOR_PROMPT")" \

@@ -119,6 +119,9 @@ echo "Auth OK."
 echo "Starting Claude Code worker ($MODEL)..."
 echo ""
 
+# Unset ANTHROPIC_API_KEY so Claude Code uses its own OAuth session, not the bot's API key
+unset ANTHROPIC_API_KEY
+
 CLAUDE_STDERR_FILE=$(mktemp)
 set +e
 claude \

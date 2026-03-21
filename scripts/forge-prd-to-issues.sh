@@ -86,6 +86,9 @@ echo "Project: $PROJECT_NAME"
 echo ""
 
 # --- Use Claude to generate task JSON ---
+# Unset so Claude Code uses OAuth, not the bot's API key
+unset ANTHROPIC_API_KEY
+
 TASK_JSON=$(claude \
     --model claude-sonnet-4-6 \
     --dangerously-skip-permissions \
