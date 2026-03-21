@@ -5,14 +5,15 @@ Runs two things concurrently:
 2. Notification HTTP endpoint (FastAPI on port 8774) — receives forge script notifications
 """
 
-import asyncio
+import atexit
 import logging
 import threading
 
 import uvicorn
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-from config import BOT_TOKEN, NOTIFY_PORT
+from config import BOT_TOKEN, CHAT_ID, NOTIFY_PORT
 from handlers.commands import (
     cmd_help, cmd_projects, cmd_status, cmd_board,
     cmd_deploy, cmd_ship, cmd_kick, cmd_plan,
@@ -21,6 +22,12 @@ from handlers.commands import (
 from handlers.conversations import (
     start_new_project, start_live_notes, end_live_notes, route_message,
 )
+from handlers.claude_mode import (
+    cmd_claude_plan, cmd_claude_review, cmd_claude_default,
+    cmd_done as claude_cmd_done,
+    handle_claude_message, cleanup_all_sessions,
+)
+from modal_sessions import get_modal_session
 from notify_endpoint import notify_app
 
 logging.basicConfig(
@@ -42,10 +49,45 @@ def run_notify_server():
     server.run()
 
 
+async def unified_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified /done handler — routes to Claude mode or live notes."""
+    if update.effective_chat.id != CHAT_ID:
+        return
+
+    # Try Claude mode first
+    modal = get_modal_session(update.effective_chat.id)
+    if modal:
+        await claude_cmd_done(update, context)
+        return
+
+    # Fall through to live notes
+    await end_live_notes(update, context)
+
+
+async def unified_route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified message router — Claude mode takes priority over old sessions."""
+    if update.effective_chat.id != CHAT_ID:
+        return
+
+    chat_id = update.effective_chat.id
+
+    # Claude modal session takes priority
+    modal = get_modal_session(chat_id)
+    if modal:
+        await handle_claude_message(update, modal)
+        return
+
+    # Fall through to old session router (interviews, live notes)
+    await route_message(update, context)
+
+
 def main():
     if not BOT_TOKEN:
         log.error("No bot token found. Check ~/.forge-bot-token")
         return
+
+    # Clean up Claude sessions on exit
+    atexit.register(cleanup_all_sessions)
 
     # Start notification server in background thread
     notify_thread = threading.Thread(target=run_notify_server, daemon=True)
@@ -69,13 +111,20 @@ def main():
     application.add_handler(CommandHandler("staging", cmd_staging))
     application.add_handler(CommandHandler("e2e", cmd_e2e))
 
+    # Claude Code relay modes
+    application.add_handler(CommandHandler("cplan", cmd_claude_plan))
+    application.add_handler(CommandHandler("creview", cmd_claude_review))
+    application.add_handler(CommandHandler("claude", cmd_claude_default))
+
     # LLM-powered conversation handlers
     application.add_handler(CommandHandler("newproject", start_new_project))
     application.add_handler(CommandHandler("testing", start_live_notes))
-    application.add_handler(CommandHandler("done", end_live_notes))
 
-    # Non-command messages → session router
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, route_message))
+    # Unified /done — handles both Claude mode and live notes
+    application.add_handler(CommandHandler("done", unified_done))
+
+    # Non-command messages → unified router
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unified_route_message))
 
     log.info("forge-bot starting. Polling for Telegram messages...")
     application.run_polling(drop_pending_updates=True)

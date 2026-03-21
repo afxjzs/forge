@@ -39,6 +39,13 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await _reply(update, """[forge] Commands:
 
+Claude Code relay:
+/cplan <project>      — Planning mode (Claude reads + plans)
+/creview <project>    — Review mode (Claude reviews code)
+/claude <project>     — Default mode (Claude does everything)
+/done                 — End session with summary
+
+Pipeline:
 /status [project]     — Project status (all or one)
 /board <project>      — Kanban task board
 /deploy <project>     — Deploy staging branch
@@ -50,10 +57,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /projects             — List all projects
 /staging <project>    — What's on staging
 /e2e <project>        — Run E2E tests
-/feature <project>    — Add feature (follow-up prompts)
 /testing <project>    — Start live notes session
-/done                 — End live notes session
-/research <project> <topic> — Research a topic
 /help                 — This message""")
 
 
