@@ -32,6 +32,17 @@ PROJECT_NAME="$(basename "$PROJECT_PATH")"
 WORKTREE_DIR="$PROJECT_PATH/.worktrees/issue-$ISSUE_NUMBER"
 BRANCH_NAME="issue/$ISSUE_NUMBER"
 
+# --- Cleanup trap: ensure worktree removal on all exits ---
+cleanup_worktree() {
+    cd "$PROJECT_PATH" 2>/dev/null || true
+    if [[ -d "$WORKTREE_DIR" ]]; then
+        if ! git worktree remove "$WORKTREE_DIR" --force 2>/dev/null; then
+            rm -rf "$WORKTREE_DIR" 2>/dev/null || true
+        fi
+    fi
+}
+trap cleanup_worktree EXIT
+
 # --- Helper: send notification (NEVER swallow failures) ---
 notify() {
     local msg="$1"
@@ -225,8 +236,13 @@ Closes #$ISSUE_NUMBER
                 GH_EXIT=$?
 
                 if [[ $GH_EXIT -ne 0 ]]; then
+                    # "no checks" returns exit code 1 — that's not an error
+                    if echo "$CHECK_STATUS" | grep -qi "no checks"; then
+                        CI_PASSED=true
+                        echo "No CI checks configured — proceeding."
+                        break
+                    fi
                     echo "WARNING: gh pr checks failed (exit $GH_EXIT): $CHECK_STATUS"
-                    # Don't interpret error messages as CI status — just wait and retry
                     sleep 15
                     WAITED=$((WAITED + 15))
                     echo "  ...retrying ($WAITED/${MAX_WAIT}s)"
