@@ -6,16 +6,16 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-logger = logging.getLogger("forge-bot")
-
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import CHAT_ID, FORGE_ROOT
+from config import CHAT_ID
 from sessions import Session, SessionType, get_session, set_session, clear_session
 from services.forge_api import api, ForgeAPIError
-from services.llm import ask_claude, classify_note, synthesize_specs
+from services.llm import classify_note, synthesize_specs
 from services.formatting import truncate
+
+logger = logging.getLogger("forge-bot")
 
 
 def _check_auth(update: Update) -> bool:

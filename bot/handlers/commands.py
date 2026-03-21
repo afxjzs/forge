@@ -155,7 +155,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply(update, "[forge] Usage: /plan <project>")
         return
     try:
-        data = await api.plan(project)
+        await api.plan(project)
         await _reply(update, f"[{project}] Planner started. Check back for task queue.")
     except Exception as e:
         await _error_reply(update, e)
