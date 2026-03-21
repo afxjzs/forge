@@ -138,6 +138,50 @@ fi
 echo "Auth OK."
 echo ""
 
+# --- Pre-flight: cleanup stale state ---
+echo "Running pre-flight cleanup..."
+cd "$PROJECT_PATH"
+
+# Clean up stale worktrees from crashed workers
+echo "  Checking for stale worktrees..."
+if [[ -d "$PROJECT_PATH/.worktrees" ]]; then
+    for wt_dir in "$PROJECT_PATH"/.worktrees/issue-*; do
+        if [[ -d "$wt_dir" ]]; then
+            # Check if this worktree is registered in git
+            if ! git worktree list --porcelain 2>/dev/null | grep -q "$(basename "$wt_dir")"; then
+                echo "    Removing stale worktree: $(basename "$wt_dir")"
+                rm -rf "$wt_dir"
+            fi
+        fi
+    done
+fi
+
+# Clean up branches for closed issues
+echo "  Checking for orphaned issue branches..."
+open_issues=$(gh issue list --state open --json number --jq '.[].number' 2>/dev/null || echo "")
+
+# Check remote issue/* branches
+remote_branches=$(git branch -r 2>/dev/null | grep "origin/issue/" | sed 's|.*/||' | xargs || true)
+for branch in $remote_branches; do
+    issue_num="${branch#issue/}"
+    if ! echo "$open_issues" | grep -q "^$issue_num$"; then
+        echo "    Pruning closed issue branch: $branch"
+        git push origin -d "$branch" 2>/dev/null || true
+    fi
+done
+
+# Check local issue/* branches
+for branch in $(git branch 2>/dev/null | grep "issue/" | sed 's/^[* ] //' | xargs || true); do
+    issue_num="${branch#issue/}"
+    if ! echo "$open_issues" | grep -q "^$issue_num$"; then
+        echo "    Deleting local closed issue branch: $branch"
+        git branch -D "$branch" 2>/dev/null || true
+    fi
+done
+
+echo "Pre-flight cleanup complete."
+echo ""
+
 # --- Main loop ---
 echo "=== forge-run: starting Ralph Loop (GitHub Issues mode) ==="
 echo "Project: $PROJECT_PATH"
@@ -164,6 +208,19 @@ while true; do
         *)
             echo "STEERING: custom directive: $steering" ;;
     esac
+
+    # 1.5. Quick cleanup of orphaned issue branches (periodic)
+    if [[ $((iteration % 5)) -eq 0 ]]; then
+        cd "$PROJECT_PATH"
+        open_issues=$(gh issue list --state open --json number --jq '.[].number' 2>/dev/null || echo "")
+        remote_branches=$(git branch -r 2>/dev/null | grep "origin/issue/" | sed 's|.*/||' | xargs || true)
+        for branch in $remote_branches; do
+            issue_num="${branch#issue/}"
+            if ! echo "$open_issues" | grep -q "^$issue_num$"; then
+                git push origin -d "$branch" 2>/dev/null || true
+            fi
+        done
+    fi
 
     # 2. Pick next issue
     cd "$PROJECT_PATH"
