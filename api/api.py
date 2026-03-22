@@ -1090,6 +1090,20 @@ def trigger_e2e(name: str):
 # --- GitHub Webhook ---
 
 
+def _notify_telegram(message: str):
+    """Send a notification to Telegram via forge-bot's notify endpoint."""
+    try:
+        resp = httpx.post(
+            "http://127.0.0.1:8774/notify",
+            json={"message": message},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.error(f"Telegram notify failed: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"Telegram notify error: {e}")
+
+
 def _verify_github_signature(body: bytes, signature: str) -> bool:
     """Verify HMAC-SHA256 signature from GitHub webhook."""
     if not GITHUB_WEBHOOK_SECRET:
@@ -1195,6 +1209,61 @@ async def github_webhook(request: Request):
                 return {"status": "skipped", "reason": e.detail}
         else:
             return {"status": "ignored", "reason": f"action={action}, no task label"}
+
+    # Push event — auto-deploy staging when code is pushed/merged to staging branch
+    if event_type == "push":
+        ref = payload.get("ref", "")
+        repo_name = payload.get("repository", {}).get("full_name", "")
+
+        if ref == "refs/heads/staging":
+            project_name = _repo_to_project_name(repo_name)
+            if not project_name:
+                logger.warning(f"GitHub webhook: push to staging for {repo_name} but repo not mapped")
+                return {"status": "ignored", "reason": "repo not mapped"}
+
+            logger.info(f"GitHub webhook: push to staging in {repo_name} → auto-deploying {project_name}")
+
+            try:
+                _stage, project_path = find_project(project_name)
+
+                # Pull latest staging
+                pull_result = subprocess.run(
+                    ["git", "pull", "origin", "staging"],
+                    cwd=str(project_path), capture_output=True, text=True, timeout=60,
+                )
+                if pull_result.returncode != 0:
+                    logger.error(f"Staging auto-deploy: git pull failed for {project_name}: {pull_result.stderr.strip()}")
+                    return {"status": "error", "reason": f"git pull failed: {pull_result.stderr.strip()[:200]}"}
+
+                # Rebuild staging container
+                staging_compose = project_path / "docker-compose.staging.yml"
+                if staging_compose.exists():
+                    deploy_result = subprocess.run(
+                        ["docker", "compose", "-f", "docker-compose.staging.yml", "up", "-d", "--build"],
+                        cwd=str(project_path), capture_output=True, text=True, timeout=300,
+                    )
+                    if deploy_result.returncode != 0:
+                        logger.error(f"Staging auto-deploy: docker compose failed for {project_name}: {deploy_result.stderr.strip()[:300]}")
+                        # Notify via forge-bot
+                        _notify_telegram(f"⚠ Staging deploy FAILED for {project_name}:\n{deploy_result.stderr.strip()[:200]}")
+                        return {"status": "error", "reason": "docker compose failed"}
+
+                    commit = payload.get("head_commit", {}).get("message", "unknown")[:80]
+                    logger.info(f"Staging auto-deploy: {project_name} deployed successfully ({commit})")
+                    _notify_telegram(f"✅ {project_name} staging deployed: {commit}")
+                    return {"status": "deployed", "project": project_name, "environment": "staging"}
+                else:
+                    # Non-Docker project (like forge itself) — just pull is enough
+                    logger.info(f"Staging auto-deploy: {project_name} pulled (no staging compose)")
+                    return {"status": "pulled", "project": project_name}
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Staging auto-deploy failed for {project_name}: {e}")
+                return {"status": "error", "reason": str(e)}
+
+        return {"status": "ignored", "reason": f"push to {ref}, not staging"}
 
     # All other events — acknowledge but ignore
     return {"status": "ignored", "event": event_type}
