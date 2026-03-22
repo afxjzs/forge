@@ -86,6 +86,14 @@ WORKER_INSTRUCTIONS=$(cat "$WORKER_PROMPT")
 ERRORS_CONTENT=""
 [[ -f "$PROJECT_PATH/.agent/ERRORS.md" ]] && ERRORS_CONTENT=$(tail -50 "$PROJECT_PATH/.agent/ERRORS.md")
 
+# Load retry context from previous failed attempt (if any)
+RETRY_CONTEXT=""
+RETRY_CONTEXT_FILE="$PROJECT_PATH/.agent/.retry-context-$ISSUE_NUMBER"
+if [[ -f "$RETRY_CONTEXT_FILE" ]]; then
+    RETRY_CONTEXT=$(cat "$RETRY_CONTEXT_FILE")
+    echo "Retry context loaded from previous attempt."
+fi
+
 FULL_PROMPT="You are a forge pipeline worker implementing GitHub Issue #$ISSUE_NUMBER.
 
 PROJECT: $PROJECT_PATH
@@ -101,6 +109,8 @@ $ERRORS_CONTENT
 
 ## Stack Known Issues
 $STACK_ISSUES
+
+$RETRY_CONTEXT
 
 ## Instructions
 1. Read CLAUDE.md for project conventions and commands
