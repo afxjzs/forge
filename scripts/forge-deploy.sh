@@ -233,7 +233,7 @@ if [[ -x "$SMOKE_TEST" ]]; then
     if [[ $SMOKE_EXIT -ne 0 ]]; then
         echo ""
         echo "ERROR: Smoke tests FAILED on staging. Do NOT promote to production."
-        "$FORGE_ROOT/scripts/forge-notify.sh" "[$PROJECT_NAME] Smoke tests FAILED on staging. Do NOT promote to production." 2>&1 || echo "WARNING: notification failed" >&2
+        "$FORGE_ROOT/scripts/forge-notify-event.sh" smoke_failed --project "$PROJECT_NAME" 2>&1 || echo "WARNING: notification failed" >&2
     fi
 else
     echo ""
