@@ -5,7 +5,6 @@ Runs two things concurrently:
 2. Notification HTTP endpoint (FastAPI on port 8774) — receives forge script notifications
 """
 
-import asyncio
 import logging
 import threading
 
@@ -14,13 +13,24 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 from config import BOT_TOKEN, NOTIFY_PORT
 from handlers.commands import (
-    cmd_help, cmd_projects, cmd_status, cmd_board,
-    cmd_deploy, cmd_ship, cmd_kick,
-    cmd_adopt, cmd_staging, cmd_e2e,
+    cmd_adopt,
+    cmd_board,
+    cmd_deploy,
+    cmd_e2e,
+    cmd_help,
+    cmd_kick,
+    cmd_projects,
+    cmd_ship,
+    cmd_staging,
+    cmd_status,
 )
 from handlers.conversations import (
-    start_new_project, cmd_plan_mode, cmd_testing_mode, cmd_review_mode,
-    cmd_done, route_message,
+    cmd_done,
+    cmd_plan_mode,
+    cmd_review_mode,
+    cmd_testing_mode,
+    route_message,
+    start_new_project,
 )
 from notify_endpoint import notify_app
 

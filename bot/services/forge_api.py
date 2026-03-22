@@ -1,6 +1,7 @@
 """HTTP client for forge-api. The bot calls this for ALL project operations."""
 
 import httpx
+
 from config import FORGE_API_URL
 
 
@@ -57,7 +58,8 @@ class ForgeAPIClient:
 
     async def add_feature(self, name: str, title: str, description: str, priority: int = 2) -> dict:
         return await self._request(
-            "POST", f"/projects/{name}/feature",
+            "POST",
+            f"/projects/{name}/feature",
             json={"title": title, "description": description, "priority": priority},
         )
 

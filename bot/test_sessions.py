@@ -1,6 +1,5 @@
 """Tests for the modal session manager."""
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -12,12 +11,20 @@ _tmpdir = tempfile.mkdtemp()
 _sessions_file = Path(_tmpdir) / "sessions.json"
 
 with patch("config.SESSIONS_FILE", _sessions_file):
-    from sessions import (
-        Mode, ModalSession, SubSession, SessionType,
-        get_session, set_session, clear_session,
-        enter_mode, exit_mode, mode_tag,
-    )
     import sessions
+    from sessions import (
+        ModalSession,
+        Mode,
+        SessionType,
+        SubSession,
+        clear_session,
+        enter_mode,
+        exit_mode,
+        get_session,
+        mode_tag,
+        set_session,
+    )
+
     sessions.SESSIONS_FILE = _sessions_file
 
 

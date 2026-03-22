@@ -104,18 +104,25 @@ def find_project_path(name: str) -> Path | None:
 def read_task_counts(project_path: Path) -> dict:
     """Read task counts from GitHub Issues (primary) with local file fallback."""
     counts = {"queued": 0, "in_progress": 0, "done": 0, "needs_review": 0}
-    gh_env = {**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")}
+    gh_env = {
+        **__import__("os").environ,
+        "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+    }
 
     try:
         # Open task issues = queued (minus in-progress)
         result = subprocess.run(
             ["gh", "issue", "list", "--label", "task", "--state", "open", "--json", "number,labels", "--limit", "100"],
-            capture_output=True, text=True, timeout=15, cwd=str(project_path), env=gh_env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=str(project_path),
+            env=gh_env,
         )
         if result.returncode == 0:
             issues = json.loads(result.stdout or "[]")
             for issue in issues:
-                labels = [l["name"] for l in issue.get("labels", [])]
+                labels = [lbl["name"] for lbl in issue.get("labels", [])]
                 if "in-progress" in labels:
                     counts["in_progress"] += 1
                 elif "needs-review" in labels:
@@ -126,7 +133,11 @@ def read_task_counts(project_path: Path) -> dict:
         # Closed task issues = done
         result = subprocess.run(
             ["gh", "issue", "list", "--label", "task", "--state", "closed", "--json", "number", "--limit", "100"],
-            capture_output=True, text=True, timeout=15, cwd=str(project_path), env=gh_env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=str(project_path),
+            env=gh_env,
         )
         if result.returncode == 0:
             closed = json.loads(result.stdout or "[]")
@@ -137,7 +148,10 @@ def read_task_counts(project_path: Path) -> dict:
             return counts
     except Exception as e:
         import logging
-        logging.getLogger("forge-api").warning(f"read_task_counts: GitHub Issues lookup failed for {project_path.name}: {e}")
+
+        logging.getLogger("forge-api").warning(
+            f"read_task_counts: GitHub Issues lookup failed for {project_path.name}: {e}"
+        )
 
     # Fallback to local task files
     tasks_dir = project_path / ".agent" / "tasks"
@@ -199,7 +213,8 @@ def check_spec_completeness(project_path: Path) -> dict:
         content = backlog_file.read_text()
         # Check if backlog has any actual items (not just headers and comments)
         has_items = any(
-            line.strip().startswith("- ") and not line.strip().startswith("- **")
+            line.strip().startswith("- ")
+            and not line.strip().startswith("- **")
             or (line.strip().startswith("- **") and "TODO" not in line)
             for line in content.split("\n")
         )
@@ -287,7 +302,12 @@ def determine_next_action(name: str, stage: str, project_path: Path, tasks: dict
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "forge-api", "version": "0.2.0", "timestamp": datetime.now(timezone.utc).isoformat()}
+    return {
+        "status": "ok",
+        "service": "forge-api",
+        "version": "0.2.0",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/projects")
@@ -307,14 +327,19 @@ def list_projects():
                         _, project_path = find_project(item.name)
                         tasks = read_task_counts(project_path)
                         next_action = determine_next_action(item.name, stage, project_path, tasks)
-                        projects.append({
-                            "name": item.name,
-                            "next_action": next_action["action"],
-                            "message": next_action["message"],
-                        })
+                        projects.append(
+                            {
+                                "name": item.name,
+                                "next_action": next_action["action"],
+                                "message": next_action["message"],
+                            }
+                        )
                     except Exception as e:
                         import logging
-                        logging.getLogger("forge-api").warning(f"list_projects: failed to get status for {item.name}: {e}")
+
+                        logging.getLogger("forge-api").warning(
+                            f"list_projects: failed to get status for {item.name}: {e}"
+                        )
                         projects.append({"name": item.name, "error": str(e)})
                 else:
                     projects.append({"name": item.name})
@@ -386,7 +411,8 @@ def create_project(req: NewProjectRequest):
 
     result = subprocess.run(
         [str(SCRIPTS_DIR / "forge-init.sh"), req.name, req.stack],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise HTTPException(status_code=500, detail=f"Init failed: {result.stderr}")
@@ -416,7 +442,8 @@ def promote_project(name: str, req: PromoteRequest):
 
     result = subprocess.run(
         [str(SCRIPTS_DIR / "forge-promote.sh"), name, req.target_stage],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         raise HTTPException(status_code=500, detail=f"Promote failed: {result.stderr}\n{result.stdout}")
@@ -471,13 +498,18 @@ def trigger_orchestrator(name: str):
 
     # Check GitHub Issues for open tasks
     import logging
+
     logger = logging.getLogger("forge-api")
     gh_env = {**os.environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + os.environ.get("PATH", "")}
     open_issues = 0
     try:
         result = subprocess.run(
             ["gh", "issue", "list", "--label", "task", "--state", "open", "--json", "number", "--jq", "length"],
-            capture_output=True, text=True, timeout=15, cwd=str(project_path), env=gh_env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=str(project_path),
+            env=gh_env,
         )
         if result.returncode == 0:
             open_issues = int(result.stdout.strip() or "0")
@@ -490,13 +522,18 @@ def trigger_orchestrator(name: str):
     if open_issues == 0:
         tasks = read_task_counts(project_path)
         if tasks["queued"] == 0:
-            raise HTTPException(status_code=400, detail="No open issues or queued tasks. Create issues first (use /write-a-prd then /prd-to-issues).")
+            raise HTTPException(
+                status_code=400,
+                detail="No open issues or queued tasks. Create issues first (use /write-a-prd then /prd-to-issues).",
+            )
 
     log_file = project_path / ".agent" / "orchestrator-run.log"
     with open(log_file, "w") as f:
         process = subprocess.Popen(
             [str(SCRIPTS_DIR / "forge-run.sh"), str(project_path)],
-            stdout=f, stderr=subprocess.STDOUT, start_new_session=True,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
 
     return {"status": "started", "name": name, "pid": process.pid, "open_issues": open_issues, "log": str(log_file)}
@@ -508,7 +545,9 @@ def trigger_planner(name: str):
     stage, project_path = find_project(name)
 
     if stage not in ("active", "planning"):
-        raise HTTPException(status_code=400, detail=f"Project must be in 'active' or 'planning' stage. Currently: '{stage}'")
+        raise HTTPException(
+            status_code=400, detail=f"Project must be in 'active' or 'planning' stage. Currently: '{stage}'"
+        )
 
     features_dir = project_path / "spec" / "features"
     if not features_dir.exists() or not list(features_dir.glob("*.md")):
@@ -518,7 +557,9 @@ def trigger_planner(name: str):
     with open(log_file, "w") as f:
         process = subprocess.Popen(
             [str(SCRIPTS_DIR / "forge-plan.sh"), str(project_path)],
-            stdout=f, stderr=subprocess.STDOUT, start_new_session=True,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
 
     return {"status": "started", "name": name, "pid": process.pid, "log": str(log_file)}
@@ -530,10 +571,14 @@ def prd_to_issues(name: str, req: PrdToIssuesRequest):
     stage, project_path = find_project(name)
 
     if stage not in ("active", "planning"):
-        raise HTTPException(status_code=400, detail=f"Project must be in 'active' or 'planning' stage. Currently: '{stage}'")
+        raise HTTPException(
+            status_code=400, detail=f"Project must be in 'active' or 'planning' stage. Currently: '{stage}'"
+        )
 
     if not req.issue and not req.file:
-        raise HTTPException(status_code=400, detail="Provide either 'issue' (GitHub Issue number) or 'file' (spec file path)")
+        raise HTTPException(
+            status_code=400, detail="Provide either 'issue' (GitHub Issue number) or 'file' (spec file path)"
+        )
 
     cmd = [str(SCRIPTS_DIR / "forge-prd-to-issues.sh"), str(project_path)]
     if req.issue:
@@ -544,7 +589,10 @@ def prd_to_issues(name: str, req: PrdToIssuesRequest):
     log_file = project_path / ".agent" / "prd-to-issues-run.log"
     with open(log_file, "w") as f:
         process = subprocess.Popen(
-            cmd, stdout=f, stderr=subprocess.STDOUT, start_new_session=True,
+            cmd,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
 
     return {"status": "started", "name": name, "pid": process.pid, "log": str(log_file)}
@@ -692,7 +740,7 @@ async def deploy_project(name: str, req: DeployRequest):
                 detail=f"Docker-ops deploy failed: {resp.text}",
             )
 
-        deploy_result = resp.json()
+        resp.json()  # Validate response is valid JSON
 
         # Verify container is running
         async with httpx.AsyncClient(timeout=30) as client:
@@ -727,24 +775,29 @@ async def deploy_project(name: str, req: DeployRequest):
             prod_url = prod_urls.get(name)
             if prod_url:
                 import time
+
                 time.sleep(5)  # Wait for container to fully start
                 smoke_result = subprocess.run(
                     [str(smoke_test), prod_url],
-                    capture_output=True, text=True, timeout=120,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
                 )
                 smoke_passed = smoke_result.returncode == 0
 
         # Log the deploy
         log_file = project_path / ".agent" / "LOG.md"
         if log_file.exists():
-            log_entry = json.dumps({
-                "action": "deploy",
-                "environment": "production",
-                "timestamp": timestamp,
-                "commit": commit,
-                "status": "success" if running else "failed",
-                "smoke_tests": "passed" if smoke_passed else ("failed" if smoke_passed is False else "skipped"),
-            })
+            log_entry = json.dumps(
+                {
+                    "action": "deploy",
+                    "environment": "production",
+                    "timestamp": timestamp,
+                    "commit": commit,
+                    "status": "success" if running else "failed",
+                    "smoke_tests": "passed" if smoke_passed else ("failed" if smoke_passed is False else "skipped"),
+                }
+            )
             with open(log_file, "a") as f:
                 f.write(log_entry + "\n")
 
@@ -798,7 +851,9 @@ async def deploy_project(name: str, req: DeployRequest):
         }
 
     else:
-        raise HTTPException(status_code=400, detail=f"Invalid environment '{req.environment}'. Use 'production' or 'staging'.")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid environment '{req.environment}'. Use 'production' or 'staging'."
+        )
 
 
 @app.get("/projects/{name}/staging-report")
@@ -810,7 +865,8 @@ def staging_report(name: str):
     diff_log = subprocess.run(
         ["git", "log", "main..staging", "--oneline", "--no-merges"],
         cwd=str(project_path),
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     commits = diff_log.stdout.strip().split("\n") if diff_log.returncode == 0 and diff_log.stdout.strip() else []
 
@@ -818,7 +874,8 @@ def staging_report(name: str):
     merge_log = subprocess.run(
         ["git", "log", "main..staging", "--oneline", "--merges"],
         cwd=str(project_path),
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     merges = merge_log.stdout.strip().split("\n") if merge_log.returncode == 0 and merge_log.stdout.strip() else []
 
@@ -826,7 +883,8 @@ def staging_report(name: str):
     diff_stat = subprocess.run(
         ["git", "diff", "main..staging", "--stat"],
         cwd=str(project_path),
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     stat = diff_stat.stdout.strip() if diff_stat.returncode == 0 else ""
 
@@ -909,7 +967,8 @@ def staging_report(name: str):
     gh_remote = subprocess.run(
         ["git", "remote", "get-url", "origin"],
         cwd=str(project_path),
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if gh_remote.returncode == 0 and "github.com" in gh_remote.stdout:
         # Convert git URL to compare URL
@@ -940,7 +999,9 @@ async def notify_project(name: str):
     # Send via forge-notify.sh
     result = subprocess.run(
         [str(SCRIPTS_DIR / "forge-notify.sh"), message],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
     return {
@@ -969,7 +1030,9 @@ def trigger_e2e(name: str):
 
     result = subprocess.run(
         [str(e2e_script), name, staging_url],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
 
     # Read results.json if available

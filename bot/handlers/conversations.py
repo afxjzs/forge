@@ -11,15 +11,20 @@ logger = logging.getLogger("forge-bot")
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import CHAT_ID, FORGE_ROOT
-from sessions import (
-    Mode, ModalSession, SubSession, SessionType,
-    get_session, set_session, clear_session,
-    enter_mode, exit_mode,
-)
-from services.forge_api import api, ForgeAPIError
-from services.llm import ask_claude, classify_note, synthesize_specs
+from config import CHAT_ID
+from services.forge_api import ForgeAPIError, api
 from services.formatting import truncate
+from services.llm import classify_note, synthesize_specs
+from sessions import (
+    ModalSession,
+    Mode,
+    SessionType,
+    SubSession,
+    clear_session,
+    enter_mode,
+    get_session,
+    set_session,
+)
 
 
 def _check_auth(update: Update) -> bool:
@@ -65,7 +70,11 @@ async def cmd_plan_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session = enter_mode(chat_id, Mode.PLANNING, project)
-    await _reply(update, f"Planning mode for **{project}**. Send messages to discuss architecture, features, and specs. /done to exit.", session)
+    await _reply(
+        update,
+        f"Planning mode for **{project}**. Send messages to discuss architecture, features, and specs. /done to exit.",
+        session,
+    )
 
 
 async def cmd_testing_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,7 +103,11 @@ async def cmd_testing_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context={"project_path": project_path},
     )
     set_session(chat_id, session)
-    await _reply(update, f"Testing mode for **{project}**. Send bugs, feedback, ideas — each becomes a GitHub Issue. /done to exit.", session)
+    await _reply(
+        update,
+        f"Testing mode for **{project}**. Send bugs, feedback, ideas — each becomes a GitHub Issue. /done to exit.",
+        session,
+    )
 
 
 async def cmd_review_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +125,11 @@ async def cmd_review_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session = enter_mode(chat_id, Mode.REVIEW, project)
-    await _reply(update, f"Review mode for **{project}**. Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.", session)
+    await _reply(
+        update,
+        f"Review mode for **{project}**. Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.",
+        session,
+    )
 
 
 # ---- Mode Exit ----
@@ -209,7 +226,9 @@ async def start_adoption_from_api(update: Update, context: ContextTypes.DEFAULT_
     )
     set_session(update.effective_chat.id, session)
 
-    await update.message.reply_text(f"[{project_name}] Specs need filling in. Let me ask a few questions.\n\n{questions[0]}")
+    await update.message.reply_text(
+        f"[{project_name}] Specs need filling in. Let me ask a few questions.\n\n{questions[0]}"
+    )
 
 
 async def _handle_interview_answer(update: Update, session: ModalSession):
@@ -248,11 +267,13 @@ async def _handle_interview_answer(update: Update, session: ModalSession):
             clear_session(chat_id)
 
             backlog_count = specs.get("backlog", "").count("- **")
-            await update.message.reply_text(truncate(
-                f"[{session.project}] Adopted and aligned.\n"
-                f"MVP spec written. Backlog: {backlog_count} items.\n"
-                f"Ready for feature specs whenever you want to start building."
-            ))
+            await update.message.reply_text(
+                truncate(
+                    f"[{session.project}] Adopted and aligned.\n"
+                    f"MVP spec written. Backlog: {backlog_count} items.\n"
+                    f"Ready for feature specs whenever you want to start building."
+                )
+            )
 
         except Exception as e:
             await update.message.reply_text(truncate(f"[{session.project}] Error writing specs: {e}"))
@@ -269,9 +290,15 @@ def _create_github_issue(project_path: str, title: str, body: str, labels: list[
         for label in labels:
             cmd.extend(["--label", label])
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=project_path,
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            env={
+                **__import__("os").environ,
+                "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+            },
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -287,8 +314,14 @@ def _get_open_issues(project_path: str) -> list[dict]:
     try:
         result = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--json", "number,title", "--limit", "50"],
-            capture_output=True, text=True, timeout=15, cwd=project_path,
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=project_path,
+            env={
+                **__import__("os").environ,
+                "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+            },
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
@@ -302,8 +335,14 @@ def _comment_on_issue(project_path: str, issue_number: int, comment: str) -> boo
     try:
         result = subprocess.run(
             ["gh", "issue", "comment", str(issue_number), "--body", comment],
-            capture_output=True, text=True, timeout=15, cwd=project_path,
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=project_path,
+            env={
+                **__import__("os").environ,
+                "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+            },
         )
         if result.returncode != 0:
             logger.error(f"_comment_on_issue: gh comment on #{issue_number} failed: {result.stderr.strip()}")
@@ -325,7 +364,13 @@ async def _handle_live_note(update: Update, session: ModalSession):
         result = await classify_note(note, session.project, existing_issues)
     except Exception as e:
         logger.error(f"classify_note failed: {e} — creating issue with needs-triage tag")
-        result = {"action": "create", "category": "ux", "summary": f"[needs-triage] {note[:100]}", "duplicate_of": None, "comment": None}
+        result = {
+            "action": "create",
+            "category": "ux",
+            "summary": f"[needs-triage] {note[:100]}",
+            "duplicate_of": None,
+            "comment": None,
+        }
 
     action = result.get("action", "create")
     category = result.get("category", "ux")
