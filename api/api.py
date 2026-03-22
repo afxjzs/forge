@@ -1,6 +1,7 @@
 """forge-api — Project registry and orchestrator trigger for the forge pipeline."""
 
 import json
+import logging
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -9,6 +10,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger("forge-api")
 
 app = FastAPI(title="forge-api", version="0.2.0")
 
@@ -178,6 +181,7 @@ def read_last_log_entry(project_path: Path) -> dict | None:
         try:
             return json.loads(line)
         except json.JSONDecodeError:
+            logger.warning(f"Corrupted LOG.md line (skipping): {line[:200]}")
             continue
     return None
 

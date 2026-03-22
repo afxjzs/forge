@@ -266,7 +266,7 @@ class ClaudeCodeRelay:
                     proc.kill()
                     await proc.wait()
             except ProcessLookupError:
-                pass
+                logger.debug("Process already terminated")
 
 
 # ---- Relay Registry (in-memory, per bot process) ----
