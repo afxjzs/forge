@@ -146,7 +146,10 @@ claude \
     2> >(tee "$CLAUDE_STDERR_FILE" >&2)
 
 CLAUDE_EXIT=$?
-set -e
+# Do NOT re-enable set -e here. The remaining code (CI checks, merge, cleanup)
+# uses if-blocks for error handling. set -e would cause gh/git failures to
+# kill the script before our error handling runs (e.g., exit code 8 from
+# gh pr merge when checks are still pending).
 
 # --- Check for auth failure mid-run ---
 if [[ $CLAUDE_EXIT -ne 0 ]]; then
