@@ -20,6 +20,7 @@ PROJECTS_DIR="$FORGE_ROOT/projects"
 STAGES=("inception" "planning" "active" "paused" "shipped")
 NEXUS_PROJECTS="$HOME/nexus/projects"
 NEXUS_WEBAPPS="$HOME/nexus/web-apps"
+STALE_ARTIFACTS=false
 
 # Crash handler — no silent failures
 # Only triggers for unexpected errors, not Playwright test failures (those are handled below)
@@ -91,7 +92,8 @@ echo ""
 # --- Clean previous artifacts (preserve directory inode for Docker bind mount) ---
 mkdir -p "$ARTIFACTS_DIR"
 if ! rm -rf "${ARTIFACTS_DIR:?}"/* "${ARTIFACTS_DIR}"/.[!.]* 2>&1; then
-    echo "WARNING: Failed to clean previous artifacts — results may include stale data" >&2
+    echo "ERROR: Failed to clean previous artifacts — results may include stale data" >&2
+    STALE_ARTIFACTS=true
 fi
 
 # --- Run Playwright ---
@@ -126,6 +128,9 @@ else
 fi
 
 echo ""
+if [[ "$STALE_ARTIFACTS" == "true" ]]; then
+    echo "NOTE: Stale artifacts were not cleaned before this run — results may have been contaminated." >&2
+fi
 echo "=== forge-e2e: done ==="
 
 exit $E2E_EXIT

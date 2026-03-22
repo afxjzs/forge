@@ -1,10 +1,14 @@
 """Notification endpoint. Forge scripts POST here to send Telegram messages."""
 
+import logging
+
 import httpx
 from fastapi import FastAPI
 from pydantic import BaseModel
 
 from config import BOT_TOKEN, CHAT_ID
+
+logger = logging.getLogger("forge-bot.notify")
 
 notify_app = FastAPI(title="forge-bot-notify", version="0.1.0")
 
@@ -26,13 +30,13 @@ async def send_notification(req: NotifyRequest):
         resp = await client.post(url, json=payload)
 
         if resp.status_code != 200 and req.parse_mode:
-            # Retry without parse_mode (formatting may have broken it)
+            logger.warning(f"Retrying notification without parse_mode due to: {resp.status_code}")
             payload.pop("parse_mode", None)
             resp = await client.post(url, json=payload)
 
         if resp.status_code != 200:
             error = resp.text[:300]
-            print(f"NOTIFY FAILED: {resp.status_code} {error}")
+            logger.error(f"NOTIFY FAILED: {resp.status_code} {error}")
             return {"status": "failed", "error": error}
 
     return {"status": "sent"}

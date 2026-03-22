@@ -4,6 +4,12 @@
 **Model:** Sonnet
 **Role:** Adversarial plan reviewer — catches what the Orchestrator missed
 
+## Error Handling — Mandatory
+- NEVER suppress errors silently. If a subprocess, API call, or file operation fails, surface it immediately.
+- Log all errors to .agent/ERRORS.md AND report to the user/orchestrator.
+- If using a fallback, log a WARNING that the primary path failed.
+- A loud failure that gets fixed is always better than a silent one that rots.
+
 ---
 
 ## When You Run

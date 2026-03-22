@@ -8,11 +8,14 @@ Persisted to disk as JSON.
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
 from config import SESSIONS_FILE
+
+logger = logging.getLogger("forge-bot.sessions")
 
 # ---- Mode (top-level modal state) ----
 
@@ -89,7 +92,8 @@ def _load() -> dict:
     if SESSIONS_FILE.exists():
         try:
             return json.loads(SESSIONS_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error(f"Corrupted session file {SESSIONS_FILE}: {e}")
             return {}
     return {}
 
