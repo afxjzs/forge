@@ -9,9 +9,8 @@ import asyncio
 import json
 import logging
 import os
-import signal
 from datetime import datetime, timezone
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 from uuid import uuid4
 
 logger = logging.getLogger("forge-bot.relay")
@@ -23,8 +22,14 @@ HEARTBEAT_INTERVAL = 30  # seconds
 
 # Tools that are safe to auto-approve (read-only operations)
 READ_ONLY_TOOLS = [
-    "Read", "Glob", "Grep", "Agent", "WebSearch", "WebFetch",
-    "ToolSearch", "TodoWrite",
+    "Read",
+    "Glob",
+    "Grep",
+    "Agent",
+    "WebSearch",
+    "WebFetch",
+    "ToolSearch",
+    "TodoWrite",
 ]
 
 # Wrapup prompts per mode
@@ -84,9 +89,12 @@ class ClaudeCodeRelay:
     def _base_cmd(self, write_approved: bool = False) -> list[str]:
         """Build the base claude command."""
         cmd = [
-            CLAUDE_BIN, "-p",
-            "--output-format", "stream-json",
-            "--model", self.model,
+            CLAUDE_BIN,
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--model",
+            self.model,
             "--bare",
         ]
 
@@ -188,11 +196,7 @@ class ClaudeCodeRelay:
                         tool_name = block.get("name", "?")
                         # Update heartbeat with tool activity
                         if self.send_heartbeat:
-                            asyncio.create_task(
-                                self.send_heartbeat(
-                                    f"{self.mode_tag} using {tool_name}..."
-                                )
-                            )
+                            asyncio.create_task(self.send_heartbeat(f"{self.mode_tag} using {tool_name}..."))
 
             elif event_type == "content_block_delta":
                 delta = event.get("delta", {})
@@ -224,9 +228,7 @@ class ClaudeCodeRelay:
             while True:
                 await asyncio.sleep(HEARTBEAT_INTERVAL)
                 if self.is_running and self.send_heartbeat:
-                    await self.send_heartbeat(
-                        f"{self.mode_tag} still working..."
-                    )
+                    await self.send_heartbeat(f"{self.mode_tag} still working...")
         except asyncio.CancelledError:
             pass
 
