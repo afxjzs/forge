@@ -8,7 +8,7 @@ set -euo pipefail
 # Events and templates:
 #   worker_done      --project P --issue N --title T    → ✓ [P] #N done — T
 #   pr_merged        --project P --pr N                 → 📦 [P] PR #N merged to staging
-#   retrying         --project P --issue N --attempt X  → ⟳ [P] #N attempt X failed, retrying with opus
+#   retrying         --project P --issue N --attempt X [--model M]  → ⟳ [P] #N attempt X failed, retrying with M
 #   needs_review     --project P --issue N [--error E]  → 🔔 [P] #N needs review — E
 #   needs_spec       --project P --issue N [--q Q]      → 📋 [P] #N needs better spec — Q
 #   all_done         --project P                        → ✅ [P] all issues closed. /ship when ready
@@ -64,6 +64,7 @@ ERROR_CTX=""
 QUESTIONS=""
 FAILURES=""
 URL=""
+MODEL_NAME=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -77,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         --failures)  FAILURES="$2";  shift 2 ;;
         --count)     FAILURES="$2";  shift 2 ;;
         --url)       URL="$2";       shift 2 ;;
+        --model)     MODEL_NAME="$2"; shift 2 ;;
         *) echo "ERROR: Unknown option: $1" >&2; usage ;;
     esac
 done
@@ -95,7 +97,7 @@ case "$EVENT" in
         ;;
     retrying)
         [[ -z "$ISSUE" || -z "$ATTEMPT" ]] && { echo "ERROR: retrying requires --issue and --attempt" >&2; exit 1; }
-        MESSAGE="⟳ [$PROJECT] #$ISSUE attempt $ATTEMPT failed, retrying with opus"
+        MESSAGE="⟳ [$PROJECT] #$ISSUE attempt $ATTEMPT failed, retrying with ${MODEL_NAME:-opus}"
         ;;
     needs_review)
         [[ -z "$ISSUE" ]] && { echo "ERROR: needs_review requires --issue" >&2; exit 1; }
