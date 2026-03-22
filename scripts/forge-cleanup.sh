@@ -66,7 +66,7 @@ cleanup_orphaned_branches() {
         if ! echo "$open_issues" | grep -q "^$issue_num$"; then
             # Issue is closed, remove the branch
             echo "  Pruning closed issue branch: $branch"
-            git push origin -d "$branch" 2>/dev/null || true
+            git push origin -d "$branch" 2>&1 || echo "WARNING: failed to delete remote branch $branch" >&2
             deleted=$((deleted + 1))
         fi
     done
@@ -76,7 +76,7 @@ cleanup_orphaned_branches() {
         local issue_num="${branch#issue/}"
         if ! echo "$open_issues" | grep -q "^$issue_num$"; then
             echo "  Deleting local closed issue branch: $branch"
-            git branch -D "$branch" 2>/dev/null || true
+            git branch -D "$branch" 2>&1 || echo "WARNING: failed to delete local branch $branch" >&2
         fi
     done
 

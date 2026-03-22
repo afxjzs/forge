@@ -37,7 +37,9 @@ cleanup_worktree() {
     cd "$PROJECT_PATH" 2>/dev/null || true
     if [[ -d "$WORKTREE_DIR" ]]; then
         if ! git worktree remove "$WORKTREE_DIR" --force 2>/dev/null; then
-            rm -rf "$WORKTREE_DIR" 2>/dev/null || true
+            if ! rm -rf "$WORKTREE_DIR" 2>/dev/null; then
+                echo "ERROR: cleanup trap failed to remove worktree $WORKTREE_DIR" >&2
+            fi
         fi
     fi
 }
@@ -188,7 +190,8 @@ if $COMMITTED; then
     cd "$WORKTREE_DIR"
 
     git push origin "$BRANCH_NAME" --force-with-lease 2>&1 || {
-        echo "Warning: Could not push to remote."
+        echo "ERROR: Could not push to remote. PR creation requires a pushed branch." >&2
+        exit 1
     }
 
     # Check if an OPEN PR already exists for this branch (ignore closed/merged)
@@ -302,7 +305,7 @@ Closes #$ISSUE_NUMBER"
                     echo "Closing issue #$ISSUE_NUMBER..."
                     cd "$PROJECT_PATH"
                     if ! gh issue close "$ISSUE_NUMBER" 2>&1; then
-                        echo "WARNING: Could not close issue #$ISSUE_NUMBER" >&2
+                        echo "ERROR: Could not close issue #$ISSUE_NUMBER — issue will remain open and may be re-picked by the pipeline" >&2
                     fi
                 else
                     echo "ERROR: Auto-merge failed for PR #$PR_NUMBER" >&2
@@ -347,8 +350,11 @@ else
     echo "  git worktree remove failed, attempting force cleanup..." >&2
     # If git removal fails, force-delete the directory
     if [[ -d "$WORKTREE_DIR" ]]; then
-        rm -rf "$WORKTREE_DIR"
-        echo "  Worktree directory forcefully removed."
+        if rm -rf "$WORKTREE_DIR"; then
+            echo "  Worktree directory forcefully removed."
+        else
+            echo "ERROR: rm -rf failed on worktree $WORKTREE_DIR — stale worktree may block future workers" >&2
+        fi
     fi
 fi
 

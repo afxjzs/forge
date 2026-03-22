@@ -316,8 +316,8 @@ def _create_github_issue(project_path: str, title: str, body: str, labels: list[
         return None
 
 
-def _get_open_issues(project_path: str) -> list[dict]:
-    """Get open GitHub Issues for dedup checking."""
+def _get_open_issues(project_path: str) -> list[dict] | None:
+    """Get open GitHub Issues for dedup checking. Returns None on failure (dedup unavailable)."""
     try:
         result = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--json", "number,title", "--limit", "50"],
@@ -332,9 +332,10 @@ def _get_open_issues(project_path: str) -> list[dict]:
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
+        logger.error(f"_get_open_issues: gh returned exit code {result.returncode}: {result.stderr.strip()}")
     except Exception as e:
-        logger.warning(f"_get_open_issues: gh command failed: {e}")
-    return []
+        logger.error(f"_get_open_issues: gh command failed: {e}")
+    return None
 
 
 def _comment_on_issue(project_path: str, issue_number: int, comment: str) -> bool:

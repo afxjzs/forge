@@ -34,6 +34,7 @@ notify_event() {
         echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | NOTIFICATION_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "**Event that failed to send:** $*" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        return 1
     fi
 }
 
@@ -46,6 +47,7 @@ gh_label() {
         echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | GH_LABEL_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "**Failed command:** gh issue edit #$issue $*" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        return 1
     fi
 }
 
@@ -206,7 +208,7 @@ for branch in $(git branch -r 2>/dev/null | grep "origin/issue/" | sed 's|.*/||'
     issue_num="${branch#issue/}"
     if ! echo "$open_issues" | grep -q "^$issue_num$"; then
         echo "    Pruning closed issue branch: $branch"
-        git push origin -d "$branch" 2>/dev/null || true
+        git push origin -d "$branch" 2>&1 || echo "WARNING: failed to delete remote branch $branch" >&2
     fi
 done
 
@@ -214,7 +216,7 @@ for branch in $(git branch 2>/dev/null | grep "issue/" | sed 's/^[* ] //' | xarg
     issue_num="${branch#issue/}"
     if ! echo "$open_issues" | grep -q "^$issue_num$"; then
         echo "    Deleting local closed issue branch: $branch"
-        git branch -D "$branch" 2>/dev/null || true
+        git branch -D "$branch" 2>&1 || echo "WARNING: failed to delete local branch $branch" >&2
     fi
 done
 
@@ -256,7 +258,7 @@ while true; do
         for branch in $remote_branches; do
             issue_num="${branch#issue/}"
             if ! echo "$open_issues" | grep -q "^$issue_num$"; then
-                git push origin -d "$branch" 2>/dev/null || true
+                git push origin -d "$branch" 2>&1 || echo "WARNING: failed to delete remote branch $branch" >&2
             fi
         done
     fi
