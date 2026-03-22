@@ -301,7 +301,7 @@ while true; do
     if [[ $worker_exit -eq 99 ]]; then
         echo "AUTH FAILURE: Claude CLI is not authenticated."
         gh_label "$issue_number" --remove-label "in-progress"
-        notify "[$PROJECT_NAME] Pipeline STOPPED — Claude is not logged in. Run '/login' to re-authenticate."
+        notify_event auth_failure --project "$PROJECT_NAME"
         break
     fi
 
