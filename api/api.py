@@ -1113,6 +1113,8 @@ def _build_repo_map() -> dict[str, str]:
 
     gh_env = {**os.environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + os.environ.get("PATH", "")}
     for item in active_dir.iterdir():
+        if not item.is_dir() and not item.is_symlink():
+            continue
         project_path = item.resolve() if item.is_symlink() else item
         try:
             result = subprocess.run(
