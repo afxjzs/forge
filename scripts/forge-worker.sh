@@ -226,50 +226,54 @@ Closes #$ISSUE_NUMBER
 
         if [[ -n "$PR_NUMBER" ]]; then
             # Wait for CI, then auto-merge
-            echo "Waiting for CI checks on PR #$PR_NUMBER..."
-            MAX_WAIT=300
-            WAITED=0
             CI_PASSED=false
 
-            while [[ $WAITED -lt $MAX_WAIT ]]; do
-                CHECK_STATUS=$(gh pr checks "$PR_NUMBER" 2>&1)
-                GH_EXIT=$?
+            # Fast path: if no CI workflows exist, skip the wait entirely
+            if [[ ! -d "$PROJECT_PATH/.github/workflows" ]] || [[ -z "$(ls "$PROJECT_PATH/.github/workflows/"*.yml 2>/dev/null)" ]]; then
+                echo "No CI workflows configured — skipping check wait."
+                CI_PASSED=true
+            else
+                echo "Waiting for CI checks on PR #$PR_NUMBER..."
+                MAX_WAIT=300
+                WAITED=0
 
-                if [[ $GH_EXIT -ne 0 ]]; then
-                    # "no checks" returns exit code 1 — that's not an error
+                while [[ $WAITED -lt $MAX_WAIT ]]; do
+                    CHECK_STATUS=$(gh pr checks "$PR_NUMBER" 2>&1)
+                    GH_EXIT=$?
+
+                    echo "  gh pr checks exit=$GH_EXIT output='$CHECK_STATUS'"
+
+                    # "no checks reported" returns exit code 1 — not an error
                     if echo "$CHECK_STATUS" | grep -qi "no checks"; then
                         CI_PASSED=true
-                        echo "No CI checks configured — proceeding."
+                        echo "No CI checks reported — proceeding."
                         break
                     fi
-                    echo "WARNING: gh pr checks failed (exit $GH_EXIT): $CHECK_STATUS"
+
+                    if [[ $GH_EXIT -ne 0 ]]; then
+                        echo "WARNING: gh pr checks failed (exit $GH_EXIT)"
+                        sleep 15
+                        WAITED=$((WAITED + 15))
+                        continue
+                    fi
+
+                    if echo "$CHECK_STATUS" | grep -q "fail"; then
+                        echo "CI FAILED. PR not merged."
+                        FINAL_STATUS="needs_review"
+                        break
+                    fi
+
+                    if echo "$CHECK_STATUS" | grep -q "pass" && ! echo "$CHECK_STATUS" | grep -q "pending"; then
+                        CI_PASSED=true
+                        echo "CI passed."
+                        break
+                    fi
+
                     sleep 15
                     WAITED=$((WAITED + 15))
-                    echo "  ...retrying ($WAITED/${MAX_WAIT}s)"
-                    continue
-                fi
-
-                if echo "$CHECK_STATUS" | grep -q "fail"; then
-                    echo "CI FAILED. PR not merged."
-                    FINAL_STATUS="needs_review"
-                    break
-                fi
-
-                if echo "$CHECK_STATUS" | grep -q "pass" && ! echo "$CHECK_STATUS" | grep -q "pending"; then
-                    CI_PASSED=true
-                    break
-                fi
-
-                if echo "$CHECK_STATUS" | grep -q "no checks"; then
-                    CI_PASSED=true
-                    echo "No CI checks configured — proceeding."
-                    break
-                fi
-
-                sleep 15
-                WAITED=$((WAITED + 15))
-                echo "  ...waiting ($WAITED/${MAX_WAIT}s)"
-            done
+                    echo "  ...waiting ($WAITED/${MAX_WAIT}s)"
+                done
+            fi
 
             if $CI_PASSED; then
                 echo "CI passed. Auto-merging to staging..."
