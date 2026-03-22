@@ -17,6 +17,10 @@ set -euo pipefail
 #   paused           --project P                        → ⏸ [P] pipeline paused by steering directive
 #   staging_deployed --project P --pr N [--url U]       → 🚀 [P] PR #N deployed to staging: U
 #   smoke_failed     --project P                        → 💥 [P] smoke tests FAILED on staging — do not promote
+#   e2e_passed       --project P                        → ✅ [P] E2E tests: all passed
+#   e2e_failed       --project P --url U                → 💥 [P] E2E tests FAILED — check U/test-artifacts/ for screenshots
+#   e2e_crashed      --project P                        → 🔥 [P] E2E runner crashed — check forge-e2e.sh logs
+#   orphans_found    --project P --count N              → 🌿 [P] N orphaned branch(es) with no PR
 
 FORGE_ROOT="${FORGE_ROOT:-$HOME/nexus/infra/dev-pipeline}"
 SCRIPTS_DIR="$FORGE_ROOT/scripts"
@@ -37,6 +41,10 @@ Events:
   paused           --project P
   staging_deployed --project P --pr N [--url U]
   smoke_failed     --project P
+  e2e_passed       --project P
+  e2e_failed       --project P --url U
+  e2e_crashed      --project P
+  orphans_found    --project P --count N
 EOF
     exit 1
 }
@@ -67,6 +75,7 @@ while [[ $# -gt 0 ]]; do
         --error)     ERROR_CTX="$2"; shift 2 ;;
         --questions) QUESTIONS="$2"; shift 2 ;;
         --failures)  FAILURES="$2";  shift 2 ;;
+        --count)     FAILURES="$2";  shift 2 ;;
         --url)       URL="$2";       shift 2 ;;
         *) echo "ERROR: Unknown option: $1" >&2; usage ;;
     esac
@@ -127,6 +136,20 @@ case "$EVENT" in
         ;;
     smoke_failed)
         MESSAGE="💥 [$PROJECT] smoke tests FAILED on staging — do not promote"
+        ;;
+    e2e_passed)
+        MESSAGE="✅ [$PROJECT] E2E tests: all passed"
+        ;;
+    e2e_failed)
+        [[ -z "$URL" ]] && { echo "ERROR: e2e_failed requires --url" >&2; exit 1; }
+        MESSAGE="💥 [$PROJECT] E2E tests FAILED — check $URL/test-artifacts/ for screenshots"
+        ;;
+    e2e_crashed)
+        MESSAGE="🔥 [$PROJECT] E2E runner crashed — check forge-e2e.sh logs"
+        ;;
+    orphans_found)
+        [[ -z "$FAILURES" ]] && { echo "ERROR: orphans_found requires --count" >&2; exit 1; }
+        MESSAGE="🌿 [$PROJECT] $FAILURES orphaned branch(es) with no PR — branches have unsubmitted code"
         ;;
     *)
         echo "ERROR: Unknown event '$EVENT'" >&2

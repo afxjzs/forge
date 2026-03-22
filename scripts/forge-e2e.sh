@@ -26,7 +26,7 @@ NEXUS_WEBAPPS="$HOME/nexus/web-apps"
 _e2e_crashed() {
     local line=$1
     echo "E2E runner crashed at line $line"
-    if ! "$SCRIPTS_DIR/forge-notify.sh" "[$PROJECT_NAME] E2E runner crashed (line $line). Check forge-e2e.sh logs." 2>/dev/null; then
+    if ! "$SCRIPTS_DIR/forge-notify-event.sh" e2e_crashed --project "$PROJECT_NAME" 2>/dev/null; then
         echo "ERROR: Notification also failed for E2E crash at line $line" >&2
     fi
 }
@@ -115,11 +115,11 @@ if [[ -x "$REPORT_SCRIPT" ]] || [[ -f "$REPORT_SCRIPT" ]]; then
 else
     # Fallback: simple notification
     if [[ $E2E_EXIT -eq 0 ]]; then
-        if ! "$SCRIPTS_DIR/forge-notify.sh" "[$PROJECT_NAME] E2E tests: all passed"; then
+        if ! "$SCRIPTS_DIR/forge-notify-event.sh" e2e_passed --project "$PROJECT_NAME"; then
             echo "ERROR: Failed to send E2E pass notification" >&2
         fi
     else
-        if ! "$SCRIPTS_DIR/forge-notify.sh" "[$PROJECT_NAME] E2E tests: FAILED (exit $E2E_EXIT). Check $STAGING_URL/test-artifacts/ for screenshots."; then
+        if ! "$SCRIPTS_DIR/forge-notify-event.sh" e2e_failed --project "$PROJECT_NAME" --url "$STAGING_URL"; then
             echo "ERROR: Failed to send E2E failure notification" >&2
         fi
     fi
