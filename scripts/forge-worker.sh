@@ -177,8 +177,8 @@ if $COMMITTED; then
         echo "Warning: Could not push to remote."
     }
 
-    # Check if PR already exists
-    PR_URL=$(gh pr view "$BRANCH_NAME" --json url -q .url 2>/dev/null || true)
+    # Check if an OPEN PR already exists for this branch (ignore closed/merged)
+    PR_URL=$(gh pr view "$BRANCH_NAME" --json url,state -q 'select(.state == "OPEN") | .url' 2>/dev/null || true)
     if [[ -z "$PR_URL" ]]; then
         DIFF_STAT=$(git diff --stat staging.."$BRANCH_NAME" 2>/dev/null || true)
         FILES_CHANGED=$(git diff --name-only staging.."$BRANCH_NAME" 2>/dev/null || true)
