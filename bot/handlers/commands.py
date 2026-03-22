@@ -1,12 +1,13 @@
 """Deterministic command handlers. No LLM. Call forge-api, format, reply."""
 
 import subprocess
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from config import CHAT_ID, FORGE_ROOT
-from services.forge_api import api, ForgeAPIError
-from services.formatting import format_status, format_projects, format_deploy, truncate
+from services.forge_api import ForgeAPIError, api
+from services.formatting import format_deploy, format_projects, format_status, truncate
 
 
 def _check_auth(update: Update) -> bool:
@@ -37,7 +38,9 @@ def _get_project(context: ContextTypes.DEFAULT_TYPE) -> str | None:
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _check_auth(update):
         return
-    await _reply(update, """[forge] Commands:
+    await _reply(
+        update,
+        """[forge] Commands:
 
 Modes (modal sessions):
 /plan <project>       — Enter [P] Planning mode
@@ -56,7 +59,8 @@ Actions (work in any mode):
 /projects             — List all projects
 /staging <project>    — What's on staging
 /e2e <project>        — Run E2E tests
-/help                 — This message""")
+/help                 — This message""",
+    )
 
 
 async def cmd_projects(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,11 +143,10 @@ async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         data = await api.run(project)
-        issues = data.get('open_issues', data.get('queued_tasks', 0))
+        issues = data.get("open_issues", data.get("queued_tasks", 0))
         await _reply(update, f"[{project}] Orchestrator started. {issues} open issues.")
     except Exception as e:
         await _error_reply(update, e)
-
 
 
 async def cmd_adopt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -176,6 +179,7 @@ async def cmd_adopt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if na.get("action") == "adoption_interview":
             # Hand off to conversation handler
             from handlers.conversations import start_adoption_from_api
+
             await start_adoption_from_api(update, context, data)
         else:
             project_name = data.get("name", "?")

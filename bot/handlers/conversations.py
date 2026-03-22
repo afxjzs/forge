@@ -1,4 +1,4 @@
-"""Modal session handlers: mode entry/exit, message routing, interviews, live notes, Claude relay."""
+"""Modal session handlers: mode entry/exit, message routing, interviews, live notes."""
 
 import json
 import logging
@@ -11,17 +11,19 @@ logger = logging.getLogger("forge-bot")
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from config import CHAT_ID, FORGE_ROOT
-from sessions import (
-    Mode, ModalSession, SubSession, SessionType,
-    get_session, set_session, clear_session,
-    enter_mode, exit_mode,
-)
-from services.forge_api import api, ForgeAPIError
-from services.llm import ask_claude, classify_note, synthesize_specs
+from config import CHAT_ID
+from services.forge_api import ForgeAPIError, api
 from services.formatting import truncate
-from services.claude_relay import (
-    ClaudeCodeRelay, get_relay, set_relay, remove_relay,
+from services.llm import classify_note, synthesize_specs
+from sessions import (
+    ModalSession,
+    Mode,
+    SessionType,
+    SubSession,
+    clear_session,
+    enter_mode,
+    get_session,
+    set_session,
 )
 
 
@@ -34,75 +36,6 @@ async def _reply(update: Update, text: str, session: ModalSession | None = None)
     if session and not session.is_default():
         text = f"{session.tag} {text}"
     await update.message.reply_text(truncate(text))
-
-
-# ---- Relay Helpers ----
-
-
-async def _get_project_path(project: str) -> str:
-    """Get the filesystem path for a project."""
-    try:
-        data = await api.project_status(project)
-        return data.get("path", "")
-    except ForgeAPIError:
-        return ""
-
-
-async def _start_relay(chat_id: int, project_path: str, mode: str, update: Update) -> ClaudeCodeRelay:
-    """Start a Claude Code relay for a session."""
-    # Clean up any existing relay
-    await remove_relay(chat_id)
-
-    async def heartbeat_cb(msg: str):
-        try:
-            await update.get_bot().send_message(chat_id=chat_id, text=truncate(msg))
-        except Exception as e:
-            logger.warning(f"Heartbeat send failed: {e}")
-
-    relay = ClaudeCodeRelay(
-        project_path=project_path or str(FORGE_ROOT),
-        mode=mode,
-        send_heartbeat=heartbeat_cb,
-    )
-    set_relay(chat_id, relay)
-    return relay
-
-
-# ---- Permission Approval State ----
-
-# Pending permission requests: chat_id -> {"action": str, "relay": ClaudeCodeRelay, "update": Update}
-_pending_approvals: dict[int, dict] = {}
-
-
-def has_pending_approval(chat_id: int) -> bool:
-    return chat_id in _pending_approvals
-
-
-async def handle_approval_response(update: Update, approved: bool):
-    """Handle a y/n response to a permission request."""
-    chat_id = update.effective_chat.id
-    pending = _pending_approvals.pop(chat_id, None)
-    if not pending:
-        return
-
-    session = get_session(chat_id)
-    relay = get_relay(chat_id)
-    if not relay:
-        await _reply(update, "No active relay session.", session)
-        return
-
-    if approved:
-        await _reply(update, "Approved. Executing...", session)
-        try:
-            response = await relay.send_message(
-                f"The user approved. Please proceed with: {pending['action']}",
-                write_approved=True,
-            )
-            await _reply(update, response, session)
-        except Exception as e:
-            await _reply(update, f"Error executing approved action: {e}", session)
-    else:
-        await _reply(update, "Denied. Skipping.", session)
 
 
 # ---- Mode Entry Commands ----
@@ -137,15 +70,9 @@ async def cmd_plan_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session = enter_mode(chat_id, Mode.PLANNING, project)
-
-    # Start Claude Code relay
-    project_path = await _get_project_path(project)
-    await _start_relay(chat_id, project_path, "planning", update)
-
     await _reply(
         update,
-        f"Planning mode for **{project}**. Claude Code relay active. "
-        f"Send messages to discuss architecture, features, and specs. /done to exit.",
+        f"Planning mode for **{project}**. Send messages to discuss architecture, features, and specs. /done to exit.",
         session,
     )
 
@@ -176,7 +103,11 @@ async def cmd_testing_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context={"project_path": project_path},
     )
     set_session(chat_id, session)
-    await _reply(update, f"Testing mode for **{project}**. Send bugs, feedback, ideas — each becomes a GitHub Issue. /done to exit.", session)
+    await _reply(
+        update,
+        f"Testing mode for **{project}**. Send bugs, feedback, ideas — each becomes a GitHub Issue. /done to exit.",
+        session,
+    )
 
 
 async def cmd_review_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,15 +125,9 @@ async def cmd_review_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session = enter_mode(chat_id, Mode.REVIEW, project)
-
-    # Start Claude Code relay
-    project_path = await _get_project_path(project)
-    await _start_relay(chat_id, project_path, "review", update)
-
     await _reply(
         update,
-        f"Review mode for **{project}**. Claude Code relay active. "
-        f"Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.",
+        f"Review mode for **{project}**. Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.",
         session,
     )
 
@@ -219,53 +144,17 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session(chat_id)
 
     if session.is_default():
-        # Check if there's a relay in default mode
-        relay = get_relay(chat_id)
-        if relay:
-            await _reply(update, "Ending Claude session...", session)
-            try:
-                summary = await relay.wrapup()
-                await update.message.reply_text(truncate(summary))
-            except Exception as e:
-                logger.error(f"Default relay wrapup failed: {e}")
-            await remove_relay(chat_id)
-            # Clear any pending approvals
-            _pending_approvals.pop(chat_id, None)
-            return
         await update.message.reply_text("[forge] No active mode to exit.")
         return
 
     # Mode-specific wrapup
-    relay = get_relay(chat_id)
-
     if session.mode == Mode.TESTING and session.sub and session.sub.type == SessionType.LIVE_NOTES:
         await _wrapup_testing(update, session)
     elif session.mode == Mode.PLANNING:
-        if relay:
-            await _reply(update, "Wrapping up planning session...", session)
-            try:
-                summary = await relay.wrapup()
-                await _reply(update, summary, session)
-            except Exception as e:
-                logger.error(f"Planning wrapup failed: {e}")
-                await _reply(update, f"Wrapup failed: {e}", session)
-        else:
-            await _reply(update, f"Planning session for **{session.project}** ended.", session)
+        await _reply(update, f"Planning session for **{session.project}** ended.", session)
     elif session.mode == Mode.REVIEW:
-        if relay:
-            await _reply(update, "Wrapping up review session...", session)
-            try:
-                summary = await relay.wrapup()
-                await _reply(update, summary, session)
-            except Exception as e:
-                logger.error(f"Review wrapup failed: {e}")
-                await _reply(update, f"Wrapup failed: {e}", session)
-        else:
-            await _reply(update, f"Review session for **{session.project}** ended.", session)
+        await _reply(update, f"Review session for **{session.project}** ended.", session)
 
-    # Clean up relay and session
-    await remove_relay(chat_id)
-    _pending_approvals.pop(chat_id, None)
     clear_session(chat_id)
 
 
@@ -281,29 +170,6 @@ async def _wrapup_testing(update: Update, session: ModalSession):
 
     summary = ", ".join(parts) if parts else "nothing captured"
     await _reply(update, f"Session ended. {total} GitHub Issues created: {summary}", session)
-
-
-# ---- Claude Relay Message Handler ----
-
-
-async def _handle_relay_message(update: Update, session: ModalSession):
-    """Route a message through the Claude Code relay."""
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
-    relay = get_relay(chat_id)
-
-    if not relay:
-        # Start relay on first message (for default mode or if relay died)
-        project_path = await _get_project_path(session.project) if session.project else ""
-        mode = session.mode.value if not session.is_default() else "default"
-        relay = await _start_relay(chat_id, project_path, mode, update)
-
-    try:
-        response = await relay.send_message(text)
-        await _reply(update, response, session)
-    except Exception as e:
-        logger.error(f"Relay message failed: {e}")
-        await _reply(update, f"Claude relay error: {e}", session)
 
 
 # ---- New Project Interview (runs in default mode) ----
@@ -360,7 +226,9 @@ async def start_adoption_from_api(update: Update, context: ContextTypes.DEFAULT_
     )
     set_session(update.effective_chat.id, session)
 
-    await update.message.reply_text(f"[{project_name}] Specs need filling in. Let me ask a few questions.\n\n{questions[0]}")
+    await update.message.reply_text(
+        f"[{project_name}] Specs need filling in. Let me ask a few questions.\n\n{questions[0]}"
+    )
 
 
 async def _handle_interview_answer(update: Update, session: ModalSession):
@@ -399,11 +267,13 @@ async def _handle_interview_answer(update: Update, session: ModalSession):
             clear_session(chat_id)
 
             backlog_count = specs.get("backlog", "").count("- **")
-            await update.message.reply_text(truncate(
-                f"[{session.project}] Adopted and aligned.\n"
-                f"MVP spec written. Backlog: {backlog_count} items.\n"
-                f"Ready for feature specs whenever you want to start building."
-            ))
+            await update.message.reply_text(
+                truncate(
+                    f"[{session.project}] Adopted and aligned.\n"
+                    f"MVP spec written. Backlog: {backlog_count} items.\n"
+                    f"Ready for feature specs whenever you want to start building."
+                )
+            )
 
         except Exception as e:
             await update.message.reply_text(truncate(f"[{session.project}] Error writing specs: {e}"))
@@ -420,9 +290,15 @@ def _create_github_issue(project_path: str, title: str, body: str, labels: list[
         for label in labels:
             cmd.extend(["--label", label])
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=project_path,
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            env={
+                **__import__("os").environ,
+                "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+            },
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -438,8 +314,14 @@ def _get_open_issues(project_path: str) -> list[dict]:
     try:
         result = subprocess.run(
             ["gh", "issue", "list", "--state", "open", "--json", "number,title", "--limit", "50"],
-            capture_output=True, text=True, timeout=15, cwd=project_path,
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=project_path,
+            env={
+                **__import__("os").environ,
+                "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+            },
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
@@ -453,8 +335,14 @@ def _comment_on_issue(project_path: str, issue_number: int, comment: str) -> boo
     try:
         result = subprocess.run(
             ["gh", "issue", "comment", str(issue_number), "--body", comment],
-            capture_output=True, text=True, timeout=15, cwd=project_path,
-            env={**__import__("os").environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
+            timeout=15,
+            cwd=project_path,
+            env={
+                **__import__("os").environ,
+                "PATH": "/home/linuxbrew/.linuxbrew/bin:" + __import__("os").environ.get("PATH", ""),
+            },
         )
         if result.returncode != 0:
             logger.error(f"_comment_on_issue: gh comment on #{issue_number} failed: {result.stderr.strip()}")
@@ -476,7 +364,13 @@ async def _handle_live_note(update: Update, session: ModalSession):
         result = await classify_note(note, session.project, existing_issues)
     except Exception as e:
         logger.error(f"classify_note failed: {e} — creating issue with needs-triage tag")
-        result = {"action": "create", "category": "ux", "summary": f"[needs-triage] {note[:100]}", "duplicate_of": None, "comment": None}
+        result = {
+            "action": "create",
+            "category": "ux",
+            "summary": f"[needs-triage] {note[:100]}",
+            "duplicate_of": None,
+            "comment": None,
+        }
 
     action = result.get("action", "create")
     category = result.get("category", "ux")
@@ -539,20 +433,12 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _check_auth(update):
         return
 
-    chat_id = update.effective_chat.id
+    session = get_session(update.effective_chat.id)
 
-    # Check for pending permission approval (y/n response)
-    if has_pending_approval(chat_id):
-        text = update.message.text.strip().lower()
-        if text in ("y", "yes"):
-            await handle_approval_response(update, approved=True)
-            return
-        elif text in ("n", "no"):
-            await handle_approval_response(update, approved=False)
-            return
-        # If not y/n, fall through to normal routing
-
-    session = get_session(chat_id)
+    # Default mode with no sub-session — nothing to route to
+    if session.is_default() and session.sub is None:
+        await update.message.reply_text("[forge] No active session. Use /help for commands.")
+        return
 
     # Sub-session routing (interviews work in default mode)
     if session.sub:
@@ -563,19 +449,13 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _handle_live_note(update, session)
             return
 
-    # Planning and Review modes → Claude Code relay
-    if session.mode in (Mode.PLANNING, Mode.REVIEW):
-        await _handle_relay_message(update, session)
+    # Mode-specific free-form routing (planning, review)
+    if session.mode == Mode.PLANNING:
+        await _reply(update, "Planning mode active. Claude Code relay coming soon. Use /done to exit.", session)
         return
 
-    # Default mode with active relay → continue relay conversation
-    if session.is_default() and get_relay(chat_id):
-        await _handle_relay_message(update, session)
-        return
-
-    # Default mode, no sub-session, no relay → nothing to route to
-    if session.is_default() and session.sub is None:
-        await update.message.reply_text("[forge] No active session. Use /help for commands.")
+    if session.mode == Mode.REVIEW:
+        await _reply(update, "Review mode active. Claude Code relay coming soon. Use /done to exit.", session)
         return
 
     await _reply(update, "Unknown session state. Use /done to exit, /help for commands.", session)

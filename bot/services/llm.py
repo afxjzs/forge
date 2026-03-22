@@ -1,6 +1,7 @@
 """Anthropic SDK wrapper for LLM-powered features. Sonnet only. No fallbacks."""
 
 import anthropic
+
 from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
 
 
@@ -42,9 +43,7 @@ async def classify_note(note: str, project_name: str, existing_issues: list[dict
     """
     issues_context = ""
     if existing_issues:
-        issues_list = "\n".join(
-            f"  #{i['number']}: {i['title']}" for i in existing_issues
-        )
+        issues_list = "\n".join(f"  #{i['number']}: {i['title']}" for i in existing_issues)
         issues_context = f"""
 Existing open issues for this project:
 {issues_list}
@@ -75,6 +74,7 @@ If action is "skip", set duplicate_of to the issue number."""
     text = await ask_claude(prompt, max_tokens=300)
 
     import json
+
     try:
         result = json.loads(text.strip())
         # Ensure required fields
@@ -112,6 +112,7 @@ Be concise. Reference existing docs rather than duplicating them."""
     text = await ask_claude(prompt, system="You are a technical PM. Output valid JSON only.", max_tokens=4096)
 
     import json
+
     try:
         return json.loads(text.strip())
     except json.JSONDecodeError:

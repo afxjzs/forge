@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [staging, main]
+  push:
+    branches: [staging, main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [bot, api]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        run: uv sync --group dev
+
+      - name: Lint with ruff
+        working-directory: ${{ matrix.package }}
+        run: uv run ruff check .
+
+      - name: Check formatting
+        working-directory: ${{ matrix.package }}
+        run: uv run ruff format --check .
+
+      - name: Run tests
+        working-directory: ${{ matrix.package }}
+        run: |
+          # Exit code 5 = no tests collected (not a failure)
+          uv run pytest -v --no-header --tb=short; rc=$?
+          if [ $rc -eq 5 ]; then
+            echo "No tests found in ${{ matrix.package }}/ — skipping"
+            exit 0
+          fi
+          exit $rc

@@ -8,15 +8,14 @@ Persisted to disk as JSON.
 """
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
 
 from config import SESSIONS_FILE
 
-
 # ---- Mode (top-level modal state) ----
+
 
 class Mode(str, Enum):
     DEFAULT = "default"
@@ -39,6 +38,7 @@ def mode_tag(mode: Mode) -> str:
 
 # ---- Sub-session types (state within a mode) ----
 
+
 class SessionType(str, Enum):
     NEW_PROJECT_INTERVIEW = "new_project_interview"
     ADOPTION_INTERVIEW = "adoption_interview"
@@ -49,6 +49,7 @@ class SessionType(str, Enum):
 @dataclass
 class SubSession:
     """Mode-specific state (interview progress, live notes counters, etc.)."""
+
     type: SessionType
     questions: list[str] = field(default_factory=list)
     answers: list[str] = field(default_factory=list)
@@ -59,9 +60,11 @@ class SubSession:
 
 # ---- Modal session (one per chat) ----
 
+
 @dataclass
 class ModalSession:
     """Top-level session state per chat."""
+
     mode: Mode = Mode.DEFAULT
     project: str = ""
     started_at: str = ""
@@ -80,6 +83,7 @@ class ModalSession:
 
 
 # ---- Persistence ----
+
 
 def _load() -> dict:
     if SESSIONS_FILE.exists():
