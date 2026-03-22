@@ -107,11 +107,13 @@ $STACK_ISSUES
 1. Read CLAUDE.md for project conventions and commands
 2. Read .agent/CONTEXT.md for current state
 3. Implement the issue in your worktree
-4. Run tests (command from CLAUDE.md)
-5. Commit with format: feat(#$ISSUE_NUMBER): [description]
-6. If anything fails: write error entry to .agent/ERRORS.md
+4. Run \`uv run ruff check . --fix && uv run ruff format .\` in each package dir you changed (bot/, api/, etc.)
+5. Run tests (command from CLAUDE.md)
+6. Commit with format: feat(#$ISSUE_NUMBER): [description]
+7. If anything fails: write error entry to .agent/ERRORS.md
 
 IMPORTANT: Work ONLY in the worktree at $WORKTREE_DIR.
+IMPORTANT: Lint is mandatory. CI WILL reject your PR if ruff fails. Lint before committing.
 The PR will reference 'Closes #$ISSUE_NUMBER' to auto-close the issue.
 If you fail the same approach twice, exit and the issue will be flagged for review."
 
@@ -189,8 +191,6 @@ if $COMMITTED; then
 
         PR_BODY="## Summary
 
-Implements #$ISSUE_NUMBER
-
 $ISSUE_BODY
 
 ## Where to Look
@@ -206,8 +206,9 @@ $DIFF_STAT
 </details>
 
 ---
-Closes #$ISSUE_NUMBER
-🤖 forge pipeline | Model: \`$MODEL\`"
+🤖 forge pipeline | Model: \`$MODEL\`
+
+Closes #$ISSUE_NUMBER"
 
         PR_URL=$(gh pr create \
             --title "$ISSUE_TITLE" \
@@ -234,14 +235,12 @@ Closes #$ISSUE_NUMBER
                 CI_PASSED=true
             else
                 echo "Waiting for CI checks on PR #$PR_NUMBER..."
-                MAX_WAIT=300
+                MAX_WAIT=600
                 WAITED=0
 
                 while [[ $WAITED -lt $MAX_WAIT ]]; do
                     CHECK_STATUS=$(gh pr checks "$PR_NUMBER" 2>&1)
                     GH_EXIT=$?
-
-                    echo "  gh pr checks exit=$GH_EXIT output='$CHECK_STATUS'"
 
                     # "no checks reported" returns exit code 1 — not an error
                     if echo "$CHECK_STATUS" | grep -qi "no checks"; then
@@ -251,14 +250,15 @@ Closes #$ISSUE_NUMBER
                     fi
 
                     if [[ $GH_EXIT -ne 0 ]]; then
-                        echo "WARNING: gh pr checks failed (exit $GH_EXIT)"
+                        echo "WARNING: gh pr checks returned exit $GH_EXIT — retrying"
                         sleep 15
                         WAITED=$((WAITED + 15))
                         continue
                     fi
 
                     if echo "$CHECK_STATUS" | grep -q "fail"; then
-                        echo "CI FAILED. PR not merged."
+                        echo "CI FAILED:"
+                        echo "$CHECK_STATUS"
                         FINAL_STATUS="needs_review"
                         break
                     fi
@@ -271,8 +271,13 @@ Closes #$ISSUE_NUMBER
 
                     sleep 15
                     WAITED=$((WAITED + 15))
-                    echo "  ...waiting ($WAITED/${MAX_WAIT}s)"
+                    echo "  CI pending... ($WAITED/${MAX_WAIT}s)"
                 done
+
+                if [[ $WAITED -ge $MAX_WAIT ]] && ! $CI_PASSED; then
+                    echo "CI timed out after ${MAX_WAIT}s. PR created but not merged."
+                    FINAL_STATUS="needs_review"
+                fi
             fi
 
             if $CI_PASSED; then
@@ -294,9 +299,6 @@ Closes #$ISSUE_NUMBER
                 fi
 
                 FINAL_STATUS="done"
-            elif [[ $WAITED -ge $MAX_WAIT ]]; then
-                echo "CI timed out. PR created but not merged: $PR_URL"
-                FINAL_STATUS="needs_review"
             fi
         fi
     else
