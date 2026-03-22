@@ -28,11 +28,14 @@ Do NOT read other task specs. Do NOT read LOG.md. You have one job: this task.
 |------|--------|-----------|
 | 1. Claim | Set task status to `in_progress` | Update task file |
 | 2. Implement | Write code in your worktree | None |
-| 3. Test | Run test command from CLAUDE.md | None |
-| 4. Commit | If tests pass, commit with message format below | Git |
-| 5. Log | Append outcome to LOG.md | `.agent/LOG.md` |
-| 6. Score stub | Write partial scorecard (model, retries, tests_passed) | `.agent/scores/task-NNN.json` |
-| 7. Error (if failure) | Write error entry | `.agent/ERRORS.md` |
+| 3. Lint | Run `uv run ruff check . --fix && uv run ruff format .` in each modified package dir | None |
+| 4. Test | Run test command from CLAUDE.md | None |
+| 5. Commit | If lint + tests pass, commit with message format below | Git |
+| 6. Log | Append outcome to LOG.md | `.agent/LOG.md` |
+| 7. Score stub | Write partial scorecard (model, retries, tests_passed) | `.agent/scores/task-NNN.json` |
+| 8. Error (if failure) | Write error entry | `.agent/ERRORS.md` |
+
+**Lint is mandatory.** CI will reject your PR if ruff fails. Run `uv run ruff check . --fix` and `uv run ruff format .` in every package directory you modified (e.g., `bot/`, `api/`) BEFORE committing. Do not commit code that fails lint.
 
 ---
 
