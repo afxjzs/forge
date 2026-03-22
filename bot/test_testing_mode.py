@@ -3,7 +3,6 @@
 Tests the pure logic functions without needing Telegram objects or gh CLI.
 """
 
-import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -39,7 +38,6 @@ def clean_sessions():
 
 # ---- Import _parse_note_type ----
 # We need to import after patching config; use importlib to be safe.
-import importlib
 import unittest.mock
 
 # Patch out heavy imports so we can import conversations without telegram/services
