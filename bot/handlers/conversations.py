@@ -167,16 +167,24 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _wrapup_testing(update: Update, session: ModalSession):
-    """Wrapup for testing mode — deterministic summary of bugs and features created."""
+    """Wrapup for testing mode — summary + auto-kick orchestrator if issues were created."""
     nc = session.sub.notes_captured if session.sub else {}
     bugs = nc.get("bug", 0)
     features = nc.get("feature", 0)
+    total = bugs + features
     project = session.project
-    await _reply(
-        update,
-        f"Done. Created {bugs} bugs, {features} features. /kick {project} to start workers.",
-        session,
-    )
+
+    if total > 0:
+        await _reply(update, f"Done. Created {bugs} bugs, {features} features. Starting workers...", session)
+        try:
+            data = await api.run(project)
+            open_issues = data.get("open_issues", data.get("queued_tasks", 0))
+            await _reply(update, f"[{project}] Orchestrator started. {open_issues} open issues.", session)
+        except Exception as e:
+            logger.error(f"Auto-kick failed for {project}: {e}")
+            await _reply(update, f"⚠ Auto-kick failed: {e}\nRun /kick {project} manually.", session)
+    else:
+        await _reply(update, f"Done. No issues created.", session)
 
 
 # ---- New Project Interview (runs in default mode) ----
