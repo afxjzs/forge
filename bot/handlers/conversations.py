@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from config import CHAT_ID
 from services.forge_api import ForgeAPIError, api
 from services.formatting import truncate
-from services.llm import classify_note, synthesize_specs
+from services.llm import synthesize_specs
 from sessions import (
     ModalSession,
     Mode,
@@ -159,17 +159,16 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _wrapup_testing(update: Update, session: ModalSession):
-    """Wrapup for testing mode — summarize captured notes."""
+    """Wrapup for testing mode — deterministic summary of bugs and features created."""
     nc = session.sub.notes_captured if session.sub else {}
-    parts = []
-    total = 0
-    for cat, count in nc.items():
-        if count > 0:
-            parts.append(f"{count} {cat}")
-            total += count
-
-    summary = ", ".join(parts) if parts else "nothing captured"
-    await _reply(update, f"Session ended. {total} GitHub Issues created: {summary}", session)
+    bugs = nc.get("bug", 0)
+    features = nc.get("feature", 0)
+    project = session.project
+    await _reply(
+        update,
+        f"Done. Created {bugs} bugs, {features} features. /kick {project} to start workers.",
+        session,
+    )
 
 
 # ---- New Project Interview (runs in default mode) ----
@@ -352,77 +351,88 @@ def _comment_on_issue(project_path: str, issue_number: int, comment: str) -> boo
         return False
 
 
-async def _handle_live_note(update: Update, session: ModalSession):
-    """Classify a note, check for duplicates, create or comment on GitHub Issue."""
+def _parse_note_type(text: str) -> tuple[str | None, str]:
+    """Deterministically classify a note by prefix.
+
+    Returns (note_type, clean_text) where note_type is 'bug', 'feature', or None.
+    None means no prefix — caller should ask for clarification.
+    """
+    lower = text.lower()
+    for prefix in ("bug:", "b:"):
+        if lower.startswith(prefix):
+            return "bug", text[len(prefix) :].strip()
+    for prefix in ("feature:", "f:"):
+        if lower.startswith(prefix):
+            return "feature", text[len(prefix) :].strip()
+    return None, text
+
+
+async def _create_testing_issue(
+    update: Update,
+    session: ModalSession,
+    note_type: str,
+    text: str,
+):
+    """Create a GitHub Issue for a testing-mode note (bug or feature)."""
     sub = session.sub
-    note = update.message.text.strip()
     project_path = sub.context.get("project_path", "")
 
-    existing_issues = _get_open_issues(project_path)
+    label_map = {
+        "bug": (["task", "bug", "P0", "standard"], "Bug"),
+        "feature": (["task", "enhancement", "P1", "standard"], "Feature"),
+    }
+    labels, prefix = label_map[note_type]
 
-    try:
-        result = await classify_note(note, session.project, existing_issues)
-    except Exception as e:
-        logger.error(f"classify_note failed: {e} — creating issue with needs-triage tag")
-        result = {
-            "action": "create",
-            "category": "ux",
-            "summary": f"[needs-triage] {note[:100]}",
-            "duplicate_of": None,
-            "comment": None,
-        }
+    issue_title = f"{prefix}: {text}"
+    issue_body = f"## From live testing session\n\n{text}\n\n---\nReported via forge-bot /testing session"
 
-    action = result.get("action", "create")
-    category = result.get("category", "ux")
-    summary = result.get("summary", note[:100])
-    duplicate_of = result.get("duplicate_of")
-    comment_text = result.get("comment")
+    issue_url = _create_github_issue(project_path, issue_title, issue_body, labels)
 
-    if action == "skip" and duplicate_of:
-        sub.notes_captured[category] = sub.notes_captured.get(category, 0) + 1
-        set_session(update.effective_chat.id, session)
-        await _reply(update, f"Already tracked in #{duplicate_of}.", session)
+    sub.notes_captured[note_type] = sub.notes_captured.get(note_type, 0) + 1
+    # Clear any pending state
+    sub.context.pop("pending_text", None)
+    set_session(update.effective_chat.id, session)
+
+    if issue_url:
+        issue_num = issue_url.split("/")[-1]
+        await _reply(update, f"#{issue_num} created ({note_type}).", session)
+    else:
+        await _reply(update, "Issue creation failed — logged locally.", session)
+        if project_path:
+            notes_file = Path(project_path) / ".agent" / "NOTES.md"
+            if notes_file.exists():
+                with open(notes_file, "a") as f:
+                    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+                    f.write(f"\n- [{now}] [{note_type}] {text}\n")
+
+
+async def _handle_live_note(update: Update, session: ModalSession):
+    """Deterministically classify a note by b:/f: prefix and create GitHub Issue."""
+    sub = session.sub
+    message = update.message.text.strip()
+
+    # Check if we're waiting for a b/f clarification reply
+    pending_text = sub.context.get("pending_text")
+    if pending_text:
+        reply = message.lower()
+        if reply == "b":
+            await _create_testing_issue(update, session, "bug", pending_text)
+        elif reply == "f":
+            await _create_testing_issue(update, session, "feature", pending_text)
+        else:
+            await _reply(update, f'Is "{pending_text[:80]}" a bug or a feature? (b/f)', session)
         return
 
-    if action == "comment" and duplicate_of:
-        body = comment_text or f"Additional note from testing session:\n\n{note}"
-        success = _comment_on_issue(project_path, duplicate_of, body)
-        sub.notes_captured[category] = sub.notes_captured.get(category, 0) + 1
+    # Parse prefix
+    note_type, clean_text = _parse_note_type(message)
+
+    if note_type:
+        await _create_testing_issue(update, session, note_type, clean_text)
+    else:
+        # No prefix — ask for clarification and store pending text
+        sub.context["pending_text"] = message
         set_session(update.effective_chat.id, session)
-        if success:
-            await _reply(update, f"Added to #{duplicate_of} ({category}).", session)
-        else:
-            await _reply(update, f"Comment on #{duplicate_of} failed — creating new issue.", session)
-            action = "create"
-
-    if action == "create":
-        label_map = {
-            "bug": (["task", "bug", "P0"], "Bug"),
-            "feature": (["task", "enhancement", "P1"], "Feature"),
-            "ux": (["task", "enhancement", "P2"], "UX"),
-            "redirect": (["task", "P0"], "Direction change"),
-        }
-        labels, prefix = label_map.get(category, (["enhancement"], "Note"))
-
-        issue_title = f"{prefix}: {summary}"
-        issue_body = f"## From live testing session\n\n{note}\n\n---\nCaptured via forge bot /testing session\nCategory: {category}"
-
-        issue_url = _create_github_issue(project_path, issue_title, issue_body, labels)
-
-        sub.notes_captured[category] = sub.notes_captured.get(category, 0) + 1
-        set_session(update.effective_chat.id, session)
-
-        if issue_url:
-            issue_num = issue_url.split("/")[-1]
-            await _reply(update, f"#{issue_num} created ({category}).", session)
-        else:
-            await _reply(update, "Issue creation failed — logged locally.", session)
-            if project_path:
-                notes_file = Path(project_path) / ".agent" / "NOTES.md"
-                if notes_file.exists():
-                    with open(notes_file, "a") as f:
-                        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-                        f.write(f"\n- [{now}] [{category}] {note}\n")
+        await _reply(update, f'Is "{message[:80]}" a bug or a feature? (b/f)', session)
 
 
 # ---- Message Router ----
