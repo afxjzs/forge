@@ -308,13 +308,21 @@ Closes #$ISSUE_NUMBER"
                     notify_event needs_review --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER" --error "PR #$PR_NUMBER merge FAILED — needs manual merge"
                 fi
 
-                # Trigger staging deploy
-                echo "Triggering staging deploy..."
-                if ! curl -s -X POST "http://127.0.0.1:8773/projects/$PROJECT_NAME/deploy" \
-                    -H "Content-Type: application/json" \
-                    -d '{"environment":"staging"}' \
-                    2>&1; then
-                    echo "ERROR: Staging deploy trigger failed" >&2
+                # Deploy to staging — rebuild container from staging branch
+                STAGING_COMPOSE="$PROJECT_PATH/docker-compose.staging.yml"
+                if [[ -f "$STAGING_COMPOSE" ]]; then
+                    echo "Deploying to staging..."
+                    cd "$PROJECT_PATH"
+                    git checkout staging 2>/dev/null && git pull origin staging 2>/dev/null
+                    if docker compose -f docker-compose.staging.yml up -d --build 2>&1; then
+                        echo "Staging deployed."
+                        notify_event staging_deployed --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER"
+                    else
+                        echo "ERROR: Staging deploy failed" >&2
+                        notify_event staging_deploy_failed --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER"
+                    fi
+                else
+                    echo "No docker-compose.staging.yml — skipping staging deploy."
                 fi
 
                 FINAL_STATUS="done"
