@@ -43,13 +43,12 @@ cleanup_worktree() {
 }
 trap cleanup_worktree EXIT
 
-# --- Helper: send notification (NEVER swallow failures) ---
-notify() {
-    local msg="$1"
-    if ! "$SCRIPTS_DIR/forge-notify.sh" "$msg"; then
-        echo "ERROR: Notification FAILED: $msg" >&2
+# --- Helper: send structured event notification (NEVER swallow failures) ---
+notify_event() {
+    if ! "$SCRIPTS_DIR/forge-notify-event.sh" "$@"; then
+        echo "ERROR: Notification FAILED for event: $*" >&2
         echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | NOTIFICATION_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
-        echo "**Message:** $msg" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        echo "**Event that failed to send:** $*" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
     fi
 }
@@ -286,10 +285,10 @@ Closes #$ISSUE_NUMBER"
             if $CI_PASSED; then
                 echo "CI passed. Auto-merging to staging..."
                 if gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1; then
-                    notify "[$PROJECT_NAME] PR #$PR_NUMBER merged to staging — $ISSUE_TITLE"
+                    notify_event pr_merged --project "$PROJECT_NAME" --pr "$PR_NUMBER"
                 else
                     echo "ERROR: Auto-merge failed for PR #$PR_NUMBER" >&2
-                    notify "[$PROJECT_NAME] PR #$PR_NUMBER merge FAILED — needs manual merge"
+                    notify_event needs_review --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER" --error "PR #$PR_NUMBER merge FAILED — needs manual merge"
                 fi
 
                 # Trigger staging deploy
@@ -306,7 +305,7 @@ Closes #$ISSUE_NUMBER"
         fi
     else
         echo "ERROR: Branch pushed but PR creation failed."
-        notify "[$PROJECT_NAME] Issue #$ISSUE_NUMBER: branch pushed but PR creation failed."
+        notify_event needs_review --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER" --error "branch pushed but PR creation failed"
         FINAL_STATUS="needs_review"
     fi
 fi

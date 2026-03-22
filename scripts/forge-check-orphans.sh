@@ -56,8 +56,5 @@ echo "Total remote task branches: $(echo "$REMOTE_BRANCHES" | wc -w)"
 echo "Orphaned (no PR): ${#ORPHANS[@]}"
 
 if [[ ${#ORPHANS[@]} -gt 0 ]] && $NOTIFY; then
-    ORPHAN_LIST=$(printf '  - %s\n' "${ORPHANS[@]}")
-    "$SCRIPTS_DIR/forge-notify.sh" "[$PROJECT_NAME] ${#ORPHANS[@]} orphaned branch(es) with no PR:
-$ORPHAN_LIST
-These branches have code that was never submitted for review." || true
+    "$SCRIPTS_DIR/forge-notify-event.sh" orphans_found --project "$PROJECT_NAME" --count "${#ORPHANS[@]}" || true
 fi

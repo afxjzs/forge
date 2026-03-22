@@ -19,11 +19,19 @@ set -euo pipefail
 #   - For SQLite: fresh file each deploy
 
 FORGE_ROOT="${FORGE_ROOT:-$HOME/nexus/infra/dev-pipeline}"
+SCRIPTS_DIR="$FORGE_ROOT/scripts"
 
 # Load env vars if running outside systemd
 [[ -f "$FORGE_ROOT/.env" ]] && set -a && source "$FORGE_ROOT/.env" && set +a
 PROJECTS_DIR="$FORGE_ROOT/projects"
 STAGES=("inception" "planning" "active" "paused" "shipped")
+
+# --- Helper: send structured event notification ---
+notify_event() {
+    if ! "$SCRIPTS_DIR/forge-notify-event.sh" "$@"; then
+        echo "ERROR: Notification FAILED for event: $*" >&2
+    fi
+}
 
 usage() {
     cat <<'EOF'
@@ -233,7 +241,7 @@ if [[ -x "$SMOKE_TEST" ]]; then
     if [[ $SMOKE_EXIT -ne 0 ]]; then
         echo ""
         echo "ERROR: Smoke tests FAILED on staging. Do NOT promote to production."
-        "$FORGE_ROOT/scripts/forge-notify.sh" "[$PROJECT_NAME] Smoke tests FAILED on staging. Do NOT promote to production." 2>&1 || echo "WARNING: notification failed" >&2
+        notify_event smoke_failed --project "$PROJECT_NAME"
     fi
 else
     echo ""
@@ -276,7 +284,6 @@ echo "When done reviewing:"
 echo "  forge deploy $PROJECT_NAME teardown"
 echo ""
 
-# --- Send Telegram notification via forge-api ---
+# --- Send staging deployed notification ---
 echo "Sending staging notification..."
-curl -s -X POST "http://127.0.0.1:8773/projects/$PROJECT_NAME/notify" > /dev/null 2>&1 \
-    || echo "Warning: Could not send staging notification (forge-api may be down)."
+notify_event staging_deployed --project "$PROJECT_NAME" --pr "$PR_NUMBER" --url "https://$STAGING_URL"

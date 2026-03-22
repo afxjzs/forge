@@ -27,13 +27,12 @@ PROJECT_NAME="$(basename "$PROJECT_PATH")"
 DRY_RUN=false
 [[ "${2:-}" == "--dry-run" ]] && DRY_RUN=true
 
-# --- Helper: send notification (NEVER swallow failures) ---
-notify() {
-    local msg="$1"
-    if ! "$SCRIPTS_DIR/forge-notify.sh" "$msg"; then
-        echo "ERROR: Telegram notification FAILED for message: $msg" >&2
+# --- Helper: send structured event notification (NEVER swallow failures) ---
+notify_event() {
+    if ! "$SCRIPTS_DIR/forge-notify-event.sh" "$@"; then
+        echo "ERROR: Telegram notification FAILED for event: $*" >&2
         echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | NOTIFICATION_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
-        echo "**Message that failed to send:** $msg" >> "$PROJECT_PATH/.agent/ERRORS.md"
+        echo "**Event that failed to send:** $*" >> "$PROJECT_PATH/.agent/ERRORS.md"
         echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
     fi
 }
@@ -175,7 +174,7 @@ echo "Checking Claude authentication..."
 AUTH_CHECK=$(claude -p "echo ok" 2>&1) || true
 if echo "$AUTH_CHECK" | grep -qiE "not logged in|not authenticated|session expired|login required|unauthorized|sign in|apikey"; then
     echo "FATAL: Claude CLI is not authenticated. Cannot start pipeline."
-    notify "[$PROJECT_NAME] Pipeline cannot start — Claude is not logged in. Run '/login' to re-authenticate."
+    notify_event auth_failure --project "$PROJECT_NAME"
     exit 99
 fi
 echo "Auth OK."
@@ -242,7 +241,7 @@ while true; do
             break ;;
         pause)
             echo "STEERING: pause directive received. Exiting."
-            notify "[$PROJECT_NAME] Pipeline paused by steering directive."
+            notify_event paused --project "$PROJECT_NAME"
             break ;;
         continue|"") ;;
         *)
@@ -302,7 +301,7 @@ while true; do
     if [[ $worker_exit -eq 99 ]]; then
         echo "AUTH FAILURE: Claude CLI is not authenticated."
         gh_label "$issue_number" --remove-label "in-progress"
-        notify "[$PROJECT_NAME] Pipeline STOPPED — Claude is not logged in. Run '/login' to re-authenticate."
+        notify_event auth_failure --project "$PROJECT_NAME"
         break
     fi
 
@@ -313,7 +312,7 @@ while true; do
         # Remove in-progress label (PR will close the issue)
         gh_label "$issue_number" --remove-label "in-progress"
 
-        notify "[$PROJECT_NAME] ✓ #$issue_number done — $issue_title"
+        notify_event worker_done --project "$PROJECT_NAME" --issue "$issue_number" --title "$issue_title"
 
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"done\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
             >> "$PROJECT_PATH/.agent/LOG.md"
@@ -322,7 +321,7 @@ while true; do
         echo "Worker flagged issue for review."
         consecutive_failures=$((consecutive_failures + 1))
         gh_label "$issue_number" --remove-label "in-progress" --add-label "needs-review"
-        notify "[$PROJECT_NAME] Issue #$issue_number needs review — worker flagged it."
+        notify_event needs_review --project "$PROJECT_NAME" --issue "$issue_number" --error "worker flagged it"
 
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"needs_review\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
             >> "$PROJECT_PATH/.agent/LOG.md"
@@ -331,7 +330,7 @@ while true; do
         echo "Worker failed (exit code: $worker_exit)."
         consecutive_failures=$((consecutive_failures + 1))
         gh_label "$issue_number" --remove-label "in-progress" --add-label "needs-review"
-        notify "[$PROJECT_NAME] Issue #$issue_number failed (exit $worker_exit)."
+        notify_event needs_review --project "$PROJECT_NAME" --issue "$issue_number" --error "worker exit $worker_exit"
 
         echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"failed\",\"model\":\"$model\",\"timestamp\":\"$timestamp\",\"exit_code\":$worker_exit}" \
             >> "$PROJECT_PATH/.agent/LOG.md"
@@ -341,7 +340,7 @@ while true; do
     if [[ $consecutive_failures -ge $MAX_CONSECUTIVE_FAILURES ]]; then
         echo ""
         echo "CIRCUIT BREAKER: $MAX_CONSECUTIVE_FAILURES consecutive failures."
-        notify "[$PROJECT_NAME] Circuit breaker tripped — $MAX_CONSECUTIVE_FAILURES consecutive failures."
+        notify_event circuit_breaker --project "$PROJECT_NAME" --failures "$MAX_CONSECUTIVE_FAILURES"
         break
     fi
 
@@ -358,5 +357,5 @@ open_tasks=$(gh issue list --label task --state open --json number --jq length 2
 echo "Open task issues: $open_tasks"
 
 if [[ "$open_tasks" == "0" ]] && [[ $consecutive_failures -lt $MAX_CONSECUTIVE_FAILURES ]]; then
-    notify "[$PROJECT_NAME] All task issues completed. Check staging."
+    notify_event all_done --project "$PROJECT_NAME"
 fi
