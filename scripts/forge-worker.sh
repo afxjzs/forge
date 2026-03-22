@@ -297,9 +297,10 @@ Closes #$ISSUE_NUMBER"
                 if gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1; then
                     notify_event pr_merged --project "$PROJECT_NAME" --pr "$PR_NUMBER"
 
-                    # Close the issue (GitHub auto-close only works on default branch,
-                    # but PRs target staging, not main)
+                    # Close the issue from the project dir (not worktree — branch
+                    # may be deleted by --delete-branch, breaking worktree git context)
                     echo "Closing issue #$ISSUE_NUMBER..."
+                    cd "$PROJECT_PATH"
                     if ! gh issue close "$ISSUE_NUMBER" 2>&1; then
                         echo "WARNING: Could not close issue #$ISSUE_NUMBER" >&2
                     fi

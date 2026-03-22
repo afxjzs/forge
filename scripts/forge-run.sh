@@ -300,6 +300,14 @@ while true; do
         attempt=$((attempt + 1))
         timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+        # Check if issue was already closed (by a previous attempt's successful merge)
+        issue_state=$(gh issue view "$issue_number" --json state -q .state 2>/dev/null || echo "OPEN")
+        if [[ "$issue_state" == "CLOSED" ]]; then
+            echo "  Issue #$issue_number is already closed — skipping."
+            issue_resolved=true
+            break
+        fi
+
         # Escalate to Opus on attempt 2+
         if [[ $attempt -ge 2 ]]; then
             attempt_model="$OPUS_MODEL"
