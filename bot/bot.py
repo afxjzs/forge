@@ -23,6 +23,7 @@ from handlers.conversations import (
     cmd_done, route_message,
 )
 from notify_endpoint import notify_app
+from services.claude_relay import cleanup_all_relays
 
 logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -81,7 +82,14 @@ def main():
     # Non-command messages → modal session router
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, route_message))
 
-    log.info("forge-bot starting (modal sessions enabled). Polling for Telegram messages...")
+    # Register shutdown handler to clean up Claude Code relays
+    async def on_shutdown(app):
+        log.info("Shutting down — cleaning up Claude Code relays...")
+        await cleanup_all_relays()
+
+    application.post_shutdown = on_shutdown
+
+    log.info("forge-bot starting (modal sessions + Claude relay enabled). Polling for Telegram messages...")
     application.run_polling(drop_pending_updates=True)
 
 

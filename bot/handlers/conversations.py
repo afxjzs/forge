@@ -1,4 +1,4 @@
-"""Modal session handlers: mode entry/exit, message routing, interviews, live notes."""
+"""Modal session handlers: mode entry/exit, message routing, interviews, live notes, Claude relay."""
 
 import json
 import logging
@@ -20,6 +20,9 @@ from sessions import (
 from services.forge_api import api, ForgeAPIError
 from services.llm import ask_claude, classify_note, synthesize_specs
 from services.formatting import truncate
+from services.claude_relay import (
+    ClaudeCodeRelay, get_relay, set_relay, remove_relay,
+)
 
 
 def _check_auth(update: Update) -> bool:
@@ -31,6 +34,75 @@ async def _reply(update: Update, text: str, session: ModalSession | None = None)
     if session and not session.is_default():
         text = f"{session.tag} {text}"
     await update.message.reply_text(truncate(text))
+
+
+# ---- Relay Helpers ----
+
+
+async def _get_project_path(project: str) -> str:
+    """Get the filesystem path for a project."""
+    try:
+        data = await api.project_status(project)
+        return data.get("path", "")
+    except ForgeAPIError:
+        return ""
+
+
+async def _start_relay(chat_id: int, project_path: str, mode: str, update: Update) -> ClaudeCodeRelay:
+    """Start a Claude Code relay for a session."""
+    # Clean up any existing relay
+    await remove_relay(chat_id)
+
+    async def heartbeat_cb(msg: str):
+        try:
+            await update.get_bot().send_message(chat_id=chat_id, text=truncate(msg))
+        except Exception as e:
+            logger.warning(f"Heartbeat send failed: {e}")
+
+    relay = ClaudeCodeRelay(
+        project_path=project_path or str(FORGE_ROOT),
+        mode=mode,
+        send_heartbeat=heartbeat_cb,
+    )
+    set_relay(chat_id, relay)
+    return relay
+
+
+# ---- Permission Approval State ----
+
+# Pending permission requests: chat_id -> {"action": str, "relay": ClaudeCodeRelay, "update": Update}
+_pending_approvals: dict[int, dict] = {}
+
+
+def has_pending_approval(chat_id: int) -> bool:
+    return chat_id in _pending_approvals
+
+
+async def handle_approval_response(update: Update, approved: bool):
+    """Handle a y/n response to a permission request."""
+    chat_id = update.effective_chat.id
+    pending = _pending_approvals.pop(chat_id, None)
+    if not pending:
+        return
+
+    session = get_session(chat_id)
+    relay = get_relay(chat_id)
+    if not relay:
+        await _reply(update, "No active relay session.", session)
+        return
+
+    if approved:
+        await _reply(update, "Approved. Executing...", session)
+        try:
+            response = await relay.send_message(
+                f"The user approved. Please proceed with: {pending['action']}",
+                write_approved=True,
+            )
+            await _reply(update, response, session)
+        except Exception as e:
+            await _reply(update, f"Error executing approved action: {e}", session)
+    else:
+        await _reply(update, "Denied. Skipping.", session)
 
 
 # ---- Mode Entry Commands ----
@@ -65,7 +137,17 @@ async def cmd_plan_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session = enter_mode(chat_id, Mode.PLANNING, project)
-    await _reply(update, f"Planning mode for **{project}**. Send messages to discuss architecture, features, and specs. /done to exit.", session)
+
+    # Start Claude Code relay
+    project_path = await _get_project_path(project)
+    await _start_relay(chat_id, project_path, "planning", update)
+
+    await _reply(
+        update,
+        f"Planning mode for **{project}**. Claude Code relay active. "
+        f"Send messages to discuss architecture, features, and specs. /done to exit.",
+        session,
+    )
 
 
 async def cmd_testing_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +194,17 @@ async def cmd_review_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     session = enter_mode(chat_id, Mode.REVIEW, project)
-    await _reply(update, f"Review mode for **{project}**. Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.", session)
+
+    # Start Claude Code relay
+    project_path = await _get_project_path(project)
+    await _start_relay(chat_id, project_path, "review", update)
+
+    await _reply(
+        update,
+        f"Review mode for **{project}**. Claude Code relay active. "
+        f"Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.",
+        session,
+    )
 
 
 # ---- Mode Exit ----
@@ -127,17 +219,53 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session(chat_id)
 
     if session.is_default():
+        # Check if there's a relay in default mode
+        relay = get_relay(chat_id)
+        if relay:
+            await _reply(update, "Ending Claude session...", session)
+            try:
+                summary = await relay.wrapup()
+                await update.message.reply_text(truncate(summary))
+            except Exception as e:
+                logger.error(f"Default relay wrapup failed: {e}")
+            await remove_relay(chat_id)
+            # Clear any pending approvals
+            _pending_approvals.pop(chat_id, None)
+            return
         await update.message.reply_text("[forge] No active mode to exit.")
         return
 
     # Mode-specific wrapup
+    relay = get_relay(chat_id)
+
     if session.mode == Mode.TESTING and session.sub and session.sub.type == SessionType.LIVE_NOTES:
         await _wrapup_testing(update, session)
     elif session.mode == Mode.PLANNING:
-        await _reply(update, f"Planning session for **{session.project}** ended.", session)
+        if relay:
+            await _reply(update, "Wrapping up planning session...", session)
+            try:
+                summary = await relay.wrapup()
+                await _reply(update, summary, session)
+            except Exception as e:
+                logger.error(f"Planning wrapup failed: {e}")
+                await _reply(update, f"Wrapup failed: {e}", session)
+        else:
+            await _reply(update, f"Planning session for **{session.project}** ended.", session)
     elif session.mode == Mode.REVIEW:
-        await _reply(update, f"Review session for **{session.project}** ended.", session)
+        if relay:
+            await _reply(update, "Wrapping up review session...", session)
+            try:
+                summary = await relay.wrapup()
+                await _reply(update, summary, session)
+            except Exception as e:
+                logger.error(f"Review wrapup failed: {e}")
+                await _reply(update, f"Wrapup failed: {e}", session)
+        else:
+            await _reply(update, f"Review session for **{session.project}** ended.", session)
 
+    # Clean up relay and session
+    await remove_relay(chat_id)
+    _pending_approvals.pop(chat_id, None)
     clear_session(chat_id)
 
 
@@ -153,6 +281,29 @@ async def _wrapup_testing(update: Update, session: ModalSession):
 
     summary = ", ".join(parts) if parts else "nothing captured"
     await _reply(update, f"Session ended. {total} GitHub Issues created: {summary}", session)
+
+
+# ---- Claude Relay Message Handler ----
+
+
+async def _handle_relay_message(update: Update, session: ModalSession):
+    """Route a message through the Claude Code relay."""
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip()
+    relay = get_relay(chat_id)
+
+    if not relay:
+        # Start relay on first message (for default mode or if relay died)
+        project_path = await _get_project_path(session.project) if session.project else ""
+        mode = session.mode.value if not session.is_default() else "default"
+        relay = await _start_relay(chat_id, project_path, mode, update)
+
+    try:
+        response = await relay.send_message(text)
+        await _reply(update, response, session)
+    except Exception as e:
+        logger.error(f"Relay message failed: {e}")
+        await _reply(update, f"Claude relay error: {e}", session)
 
 
 # ---- New Project Interview (runs in default mode) ----
@@ -388,12 +539,20 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _check_auth(update):
         return
 
-    session = get_session(update.effective_chat.id)
+    chat_id = update.effective_chat.id
 
-    # Default mode with no sub-session — nothing to route to
-    if session.is_default() and session.sub is None:
-        await update.message.reply_text("[forge] No active session. Use /help for commands.")
-        return
+    # Check for pending permission approval (y/n response)
+    if has_pending_approval(chat_id):
+        text = update.message.text.strip().lower()
+        if text in ("y", "yes"):
+            await handle_approval_response(update, approved=True)
+            return
+        elif text in ("n", "no"):
+            await handle_approval_response(update, approved=False)
+            return
+        # If not y/n, fall through to normal routing
+
+    session = get_session(chat_id)
 
     # Sub-session routing (interviews work in default mode)
     if session.sub:
@@ -404,13 +563,19 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _handle_live_note(update, session)
             return
 
-    # Mode-specific free-form routing (planning, review)
-    if session.mode == Mode.PLANNING:
-        await _reply(update, "Planning mode active. Claude Code relay coming soon. Use /done to exit.", session)
+    # Planning and Review modes → Claude Code relay
+    if session.mode in (Mode.PLANNING, Mode.REVIEW):
+        await _handle_relay_message(update, session)
         return
 
-    if session.mode == Mode.REVIEW:
-        await _reply(update, "Review mode active. Claude Code relay coming soon. Use /done to exit.", session)
+    # Default mode with active relay → continue relay conversation
+    if session.is_default() and get_relay(chat_id):
+        await _handle_relay_message(update, session)
+        return
+
+    # Default mode, no sub-session, no relay → nothing to route to
+    if session.is_default() and session.sub is None:
+        await update.message.reply_text("[forge] No active session. Use /help for commands.")
         return
 
     await _reply(update, "Unknown session state. Use /done to exit, /help for commands.", session)
