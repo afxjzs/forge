@@ -673,6 +673,10 @@ def adopt_project(req: AdoptRequest):
     tasks = read_task_counts(adopted_path)
     next_action = determine_next_action(name, "active", adopted_path, tasks)
 
+    # Rebuild webhook repo map since a new project was adopted
+    global _REPO_MAP
+    _REPO_MAP = _build_repo_map()
+
     return {
         "status": "adopted",
         "name": name,
@@ -1097,32 +1101,56 @@ def _verify_github_signature(body: bytes, signature: str) -> bool:
     return hmac.compare_digest(signature, expected)
 
 
-def _repo_to_project_name(repo_full_name: str) -> str | None:
-    """Map GitHub repo (e.g. 'afxjzs/OmniLingo') to forge project name.
+def _build_repo_map() -> dict[str, str]:
+    """Build a map of GitHub repo full_name (lowercase) → forge project name.
 
-    Walks adopted projects in active/ and matches by git remote URL.
+    Scans active projects once. Call at startup and on adopt.
     """
-    repo_lower = repo_full_name.lower()
+    mapping: dict[str, str] = {}
     active_dir = PROJECTS_DIR / "active"
     if not active_dir.exists():
-        return None
+        return mapping
 
+    gh_env = {**os.environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + os.environ.get("PATH", "")}
     for item in active_dir.iterdir():
         project_path = item.resolve() if item.is_symlink() else item
         try:
             result = subprocess.run(
                 ["git", "remote", "get-url", "origin"],
                 capture_output=True, text=True, timeout=5,
-                cwd=str(project_path),
+                cwd=str(project_path), env=gh_env,
             )
             if result.returncode == 0:
-                remote_url = result.stdout.strip().lower()
-                # Match "afxjzs/OmniLingo" against remote URL
-                if repo_lower in remote_url:
-                    return item.name
-        except Exception:
-            continue
-    return None
+                remote_url = result.stdout.strip()
+                # Extract "owner/repo" from URLs like:
+                #   https://github.com/afxjzs/OmniLingo.git
+                #   git@github.com:afxjzs/OmniLingo.git
+                for pattern in ("github.com/", "github.com:"):
+                    if pattern in remote_url:
+                        repo_part = remote_url.split(pattern, 1)[1].removesuffix(".git")
+                        mapping[repo_part.lower()] = item.name
+                        logger.info(f"Webhook repo map: {repo_part} → {item.name}")
+                        break
+        except Exception as e:
+            logger.warning(f"Webhook repo map: failed to read remote for {item.name}: {e}")
+    return mapping
+
+
+# Build repo map at startup — rebuilt when projects are adopted
+_REPO_MAP: dict[str, str] = {}
+
+
+def _get_repo_map() -> dict[str, str]:
+    """Get repo map, building it lazily on first use."""
+    global _REPO_MAP
+    if not _REPO_MAP:
+        _REPO_MAP = _build_repo_map()
+    return _REPO_MAP
+
+
+def _repo_to_project_name(repo_full_name: str) -> str | None:
+    """Map GitHub repo (e.g. 'afxjzs/OmniLingo') to forge project name."""
+    return _get_repo_map().get(repo_full_name.lower())
 
 
 @app.post("/webhooks/github")
