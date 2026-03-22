@@ -100,8 +100,12 @@ async def cmd_board(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(context.args) > 1:
             args.append(context.args[1])
         result = subprocess.run(args, capture_output=True, text=True, timeout=10)
-        output = result.stdout or result.stderr or "No output"
-        await _reply(update, f"```\n{output}\n```")
+        if result.returncode != 0:
+            error_output = result.stderr.strip() or result.stdout.strip() or "No output"
+            await _reply(update, f"⚠ Board command failed (exit {result.returncode}):\n```\n{error_output}\n```")
+        else:
+            output = result.stdout.strip() or "No output"
+            await _reply(update, f"```\n{output}\n```")
     except Exception as e:
         await _error_reply(update, e)
 

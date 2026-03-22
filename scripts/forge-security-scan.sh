@@ -82,14 +82,22 @@ echo ""
 # 1. Gitleaks (secret detection — always run, always critical)
 echo "[gitleaks] Scanning for secrets..."
 if command -v gitleaks &>/dev/null; then
-    GITLEAKS_OUT=$(gitleaks detect --source . --no-git --no-banner 2>&1) || true
-    GITLEAKS_COUNT=$(echo "$GITLEAKS_OUT" | grep -c "Secret" 2>/dev/null) || GITLEAKS_COUNT=0
-    if [[ "$GITLEAKS_COUNT" -gt 0 ]]; then
-        echo "  CRITICAL: $GITLEAKS_COUNT secret(s) detected"
+    GITLEAKS_OUT=$(gitleaks detect --source . --no-git --no-banner 2>&1)
+    GITLEAKS_EXIT=$?
+    if [[ "$GITLEAKS_EXIT" -ne 0 ]] && [[ "$GITLEAKS_EXIT" -ne 1 ]]; then
+        # Exit 1 = leaks found (expected), anything else = tool crashed
+        echo "  ERROR: gitleaks crashed (exit $GITLEAKS_EXIT) — treating as BLOCK"
         VERDICT="BLOCK"
-        FINDINGS+=("gitleaks: $GITLEAKS_COUNT secret(s) found in code")
+        FINDINGS+=("gitleaks: TOOL CRASHED (exit $GITLEAKS_EXIT) — cannot verify no secrets")
     else
-        echo "  Clean — no secrets found"
+        GITLEAKS_COUNT=$(echo "$GITLEAKS_OUT" | grep -c "Secret" 2>/dev/null) || GITLEAKS_COUNT=0
+        if [[ "$GITLEAKS_COUNT" -gt 0 ]]; then
+            echo "  CRITICAL: $GITLEAKS_COUNT secret(s) detected"
+            VERDICT="BLOCK"
+            FINDINGS+=("gitleaks: $GITLEAKS_COUNT secret(s) found in code")
+        else
+            echo "  Clean — no secrets found"
+        fi
     fi
 else
     echo "  Skipped — gitleaks not installed"
@@ -102,28 +110,39 @@ if $HAS_PYTHON && [[ -n "$EXISTING_FILES" ]]; then
     if [[ -n "$PYTHON_FILES" ]]; then
         echo "[bandit] Scanning Python files..."
         if command -v bandit &>/dev/null; then
-            BANDIT_OUT=$(bandit $PYTHON_FILES -f json -ll 2>/dev/null) || true
-            HIGH_COUNT=$(echo "$BANDIT_OUT" | python3 -c "
+            BANDIT_OUT=$(bandit $PYTHON_FILES -f json -ll 2>&1)
+            BANDIT_EXIT=$?
+            if [[ "$BANDIT_EXIT" -ne 0 ]] && [[ "$BANDIT_EXIT" -ne 1 ]]; then
+                # Exit 1 = issues found (expected), anything else = tool crashed
+                echo "  ERROR: bandit crashed (exit $BANDIT_EXIT) — treating as BLOCK"
+                VERDICT="BLOCK"
+                FINDINGS+=("bandit: TOOL CRASHED (exit $BANDIT_EXIT) — cannot verify no issues")
+                HIGH=0; MED=0
+            else
+                HIGH_COUNT=$(echo "$BANDIT_OUT" | python3 -c "
 import sys,json
 try:
     d=json.load(sys.stdin)
     high=[r for r in d.get('results',[]) if r['issue_severity']=='HIGH' and r['issue_confidence']=='HIGH']
     med=[r for r in d.get('results',[]) if r['issue_severity']=='MEDIUM']
     print(f'{len(high)} {len(med)}')
-except: print('0 0')
-" 2>/dev/null || echo "0 0")
-            HIGH=$(echo "$HIGH_COUNT" | awk '{print $1}')
-            MED=$(echo "$HIGH_COUNT" | awk '{print $2}')
-            if [[ "$HIGH" -gt 0 ]]; then
-                echo "  CRITICAL: $HIGH high-severity finding(s)"
-                VERDICT="BLOCK"
-                FINDINGS+=("bandit: $HIGH high-severity finding(s)")
-            elif [[ "$MED" -gt 0 ]]; then
-                echo "  WARNING: $MED medium-severity finding(s)"
-                [[ "$VERDICT" != "BLOCK" ]] && VERDICT="WARN"
-                FINDINGS+=("bandit: $MED medium-severity finding(s)")
-            else
-                echo "  Clean"
+except:
+    print('PARSE_ERROR 0', file=sys.stderr)
+    print('0 0')
+" 2>&1)
+                HIGH=$(echo "$HIGH_COUNT" | awk '{print $1}')
+                MED=$(echo "$HIGH_COUNT" | awk '{print $2}')
+                if [[ "$HIGH" -gt 0 ]]; then
+                    echo "  CRITICAL: $HIGH high-severity finding(s)"
+                    VERDICT="BLOCK"
+                    FINDINGS+=("bandit: $HIGH high-severity finding(s)")
+                elif [[ "$MED" -gt 0 ]]; then
+                    echo "  WARNING: $MED medium-severity finding(s)"
+                    [[ "$VERDICT" != "BLOCK" ]] && VERDICT="WARN"
+                    FINDINGS+=("bandit: $MED medium-severity finding(s)")
+                else
+                    echo "  Clean"
+                fi
             fi
         else
             echo "  Skipped — bandit not installed"
@@ -136,8 +155,14 @@ fi
 if [[ -n "$EXISTING_FILES" ]]; then
     echo "[semgrep] Scanning with auto rules..."
     if command -v semgrep &>/dev/null; then
-        SEMGREP_OUT=$(semgrep scan --config auto --json --quiet $EXISTING_FILES 2>/dev/null) || true
-        ERROR_COUNT=$(echo "$SEMGREP_OUT" | python3 -c "
+        SEMGREP_OUT=$(semgrep scan --config auto --json --quiet $EXISTING_FILES 2>&1)
+        SEMGREP_EXIT=$?
+        if [[ "$SEMGREP_EXIT" -ne 0 ]] && [[ "$SEMGREP_EXIT" -ne 1 ]]; then
+            echo "  ERROR: semgrep crashed (exit $SEMGREP_EXIT) — treating as BLOCK"
+            VERDICT="BLOCK"
+            FINDINGS+=("semgrep: TOOL CRASHED (exit $SEMGREP_EXIT) — cannot verify no issues")
+        else
+            ERROR_COUNT=$(echo "$SEMGREP_OUT" | python3 -c "
 import sys,json
 try:
     d=json.load(sys.stdin)
@@ -146,18 +171,19 @@ try:
     print(f'{len(errors)} {len(warns)}')
 except: print('0 0')
 " 2>/dev/null || echo "0 0")
-        ERRORS=$(echo "$ERROR_COUNT" | awk '{print $1}')
-        WARNS=$(echo "$ERROR_COUNT" | awk '{print $2}')
-        if [[ "$ERRORS" -gt 0 ]]; then
-            echo "  CRITICAL: $ERRORS error-level finding(s)"
-            VERDICT="BLOCK"
-            FINDINGS+=("semgrep: $ERRORS error-level finding(s)")
-        elif [[ "$WARNS" -gt 0 ]]; then
-            echo "  WARNING: $WARNS warning-level finding(s)"
-            [[ "$VERDICT" != "BLOCK" ]] && VERDICT="WARN"
-            FINDINGS+=("semgrep: $WARNS warning-level finding(s)")
-        else
-            echo "  Clean"
+            ERRORS=$(echo "$ERROR_COUNT" | awk '{print $1}')
+            WARNS=$(echo "$ERROR_COUNT" | awk '{print $2}')
+            if [[ "$ERRORS" -gt 0 ]]; then
+                echo "  CRITICAL: $ERRORS error-level finding(s)"
+                VERDICT="BLOCK"
+                FINDINGS+=("semgrep: $ERRORS error-level finding(s)")
+            elif [[ "$WARNS" -gt 0 ]]; then
+                echo "  WARNING: $WARNS warning-level finding(s)"
+                [[ "$VERDICT" != "BLOCK" ]] && VERDICT="WARN"
+                FINDINGS+=("semgrep: $WARNS warning-level finding(s)")
+            else
+                echo "  Clean"
+            fi
         fi
     else
         echo "  Skipped — semgrep not installed"
@@ -168,7 +194,14 @@ fi
 # 4. npm audit (JS/TS dependency vulns)
 if $HAS_NODE; then
     echo "[npm audit] Checking dependency vulnerabilities..."
-    NPM_OUT=$(npm audit --json 2>/dev/null) || true
+    NPM_OUT=$(npm audit --json 2>&1)
+    NPM_EXIT=$?
+    if [[ "$NPM_EXIT" -gt 1 ]]; then
+        # Exit 1 = vulns found (expected), >1 = tool error
+        echo "  ERROR: npm audit crashed (exit $NPM_EXIT) — treating as WARN"
+        [[ "$VERDICT" != "BLOCK" ]] && VERDICT="WARN"
+        FINDINGS+=("npm audit: TOOL CRASHED (exit $NPM_EXIT) — cannot verify no vulns")
+    fi
     CRIT_COUNT=$(echo "$NPM_OUT" | python3 -c "
 import sys,json
 try:
@@ -198,7 +231,13 @@ fi
 if $HAS_PYTHON; then
     echo "[pip audit] Checking dependency vulnerabilities..."
     if command -v pip-audit &>/dev/null; then
-        PIP_OUT=$(pip-audit --format json 2>/dev/null) || true
+        PIP_OUT=$(pip-audit --format json 2>&1)
+        PIP_EXIT=$?
+        if [[ "$PIP_EXIT" -ne 0 ]] && [[ "$PIP_EXIT" -ne 1 ]]; then
+            echo "  ERROR: pip-audit crashed (exit $PIP_EXIT) — treating as WARN"
+            [[ "$VERDICT" != "BLOCK" ]] && VERDICT="WARN"
+            FINDINGS+=("pip-audit: TOOL CRASHED (exit $PIP_EXIT) — cannot verify no vulns")
+        fi
         VULN_COUNT=$(echo "$PIP_OUT" | python3 -c "
 import sys,json
 try:
