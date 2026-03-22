@@ -196,7 +196,8 @@ class ClaudeCodeRelay:
                         tool_name = block.get("name", "?")
                         # Update heartbeat with tool activity
                         if self.send_heartbeat:
-                            asyncio.create_task(self.send_heartbeat(f"{self.mode_tag} using {tool_name}..."))
+                            task = asyncio.create_task(self.send_heartbeat(f"{self.mode_tag} using {tool_name}..."))
+                            task.add_done_callback(lambda t: t.exception() and logger.warning(f"Heartbeat failed: {t.exception()}")  if not t.cancelled() and t.exception() else None)
 
             elif event_type == "content_block_delta":
                 delta = event.get("delta", {})

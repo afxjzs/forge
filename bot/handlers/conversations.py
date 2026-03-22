@@ -94,8 +94,12 @@ async def cmd_testing_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         data = await api.project_status(project)
         project_path = data.get("path", "")
-    except ForgeAPIError:
+    except ForgeAPIError as e:
+        logger.error(f"Testing mode: forge-api failed for {project}: {e}")
         project_path = ""
+
+    if not project_path:
+        logger.warning(f"Testing mode: no project_path for {project} — GitHub Issue creation will be disabled")
 
     session = enter_mode(chat_id, Mode.TESTING, project)
     session.sub = SubSession(
@@ -103,9 +107,13 @@ async def cmd_testing_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context={"project_path": project_path},
     )
     set_session(chat_id, session)
+
+    warning = ""
+    if not project_path:
+        warning = "\n⚠ Could not resolve project path — issues will be saved locally only, not to GitHub."
     await _reply(
         update,
-        f"Testing mode for **{project}**. Send bugs, feedback, ideas — each becomes a GitHub Issue. /done to exit.",
+        f"Testing mode for **{project}**. Send bugs, feedback, ideas — each becomes a GitHub Issue. /done to exit.{warning}",
         session,
     )
 
@@ -301,10 +309,10 @@ def _create_github_issue(project_path: str, title: str, body: str, labels: list[
         )
         if result.returncode == 0:
             return result.stdout.strip()
-        print(f"gh issue create failed: {result.stderr}")
+        logger.error(f"gh issue create failed (exit {result.returncode}): {result.stderr.strip()}")
         return None
     except Exception as e:
-        print(f"gh issue create error: {e}")
+        logger.error(f"gh issue create error: {e}")
         return None
 
 
@@ -397,13 +405,21 @@ async def _create_testing_issue(
         issue_num = issue_url.split("/")[-1]
         await _reply(update, f"#{issue_num} created ({note_type}).", session)
     else:
-        await _reply(update, "Issue creation failed — logged locally.", session)
         if project_path:
             notes_file = Path(project_path) / ".agent" / "NOTES.md"
-            if notes_file.exists():
+            try:
+                notes_file.parent.mkdir(parents=True, exist_ok=True)
                 with open(notes_file, "a") as f:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
-                    f.write(f"\n- [{now}] [{note_type}] {text}\n")
+                    f.write(f"\n- [{now}] {note_type}: {text}\n")
+                await _reply(update, f"⚠ GitHub Issue creation FAILED — saved to NOTES.md instead. Run `gh auth status` to debug.", session)
+                logger.error(f"gh issue create failed for [{note_type}]: {text[:100]}... — saved to {notes_file}")
+            except Exception as e:
+                logger.error(f"CRITICAL: Failed to save note to {notes_file}: {e}")
+                await _reply(update, f"⚠ GitHub Issue creation FAILED and local save FAILED: {e}\nYour note: {text}", session)
+        else:
+            logger.error(f"CRITICAL: gh issue create failed AND no project_path — note lost: [{note_type}] {text[:200]}")
+            await _reply(update, f"⚠ GitHub Issue creation FAILED (no project path). Your note was NOT saved:\n{text}", session)
 
 
 async def _handle_live_note(update: Update, session: ModalSession):
