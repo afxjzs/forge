@@ -40,9 +40,10 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ matrix.package }}
+        shell: bash {0}
         run: |
-          # Exit code 5 = no tests collected (not a failure)
-          uv run pytest -v --no-header --tb=short; rc=$?
+          uv run pytest -v --no-header --tb=short
+          rc=$?
           if [ $rc -eq 5 ]; then
             echo "No tests found in ${{ matrix.package }}/ — skipping"
             exit 0
