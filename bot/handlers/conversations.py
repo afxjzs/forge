@@ -421,7 +421,7 @@ async def _create_testing_issue(
                 with open(notes_file, "a") as f:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
                     f.write(f"\n- [{now}] {note_type}: {text}\n")
-                await _reply(update, f"⚠ GitHub Issue creation FAILED — saved to NOTES.md instead. Run `gh auth status` to debug.", session)
+                await _reply(update, "⚠ GitHub Issue creation FAILED — saved to NOTES.md instead. Run `gh auth status` to debug.", session)
                 logger.error(f"gh issue create failed for [{note_type}]: {text[:100]}... — saved to {notes_file}")
             except Exception as e:
                 logger.error(f"CRITICAL: Failed to save note to {notes_file}: {e}")

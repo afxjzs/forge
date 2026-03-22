@@ -1,5 +1,7 @@
 """forge-api — Project registry and orchestrator trigger for the forge pipeline."""
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -8,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 logger = logging.getLogger("forge-api")
@@ -26,6 +28,7 @@ VALID_STACKS = ["nextjs", "fastapi", "react-spa", "python-cli", "typescript-lib"
 
 DOCKER_OPS_URL = os.getenv("DOCKER_OPS_URL", "http://127.0.0.1:8770")
 DOCKER_OPS_TOKEN = os.getenv("DOCKER_OPS_TOKEN", "")
+GITHUB_WEBHOOK_SECRET = os.getenv("GITHUB_WEBHOOK_SECRET", "")
 
 ADOPTION_QUESTIONS = [
     "What does this project do in a sentence? What problem does it solve?",
@@ -670,6 +673,10 @@ def adopt_project(req: AdoptRequest):
     tasks = read_task_counts(adopted_path)
     next_action = determine_next_action(name, "active", adopted_path, tasks)
 
+    # Rebuild webhook repo map since a new project was adopted
+    global _REPO_MAP
+    _REPO_MAP = _build_repo_map()
+
     return {
         "status": "adopted",
         "name": name,
@@ -1078,3 +1085,116 @@ def trigger_e2e(name: str):
         "results": results,
         "artifacts_url": f"{staging_url}/test-artifacts/",
     }
+
+
+# --- GitHub Webhook ---
+
+
+def _verify_github_signature(body: bytes, signature: str) -> bool:
+    """Verify HMAC-SHA256 signature from GitHub webhook."""
+    if not GITHUB_WEBHOOK_SECRET:
+        logger.error("GITHUB_WEBHOOK_SECRET not configured — rejecting webhook")
+        return False
+    expected = "sha256=" + hmac.new(
+        GITHUB_WEBHOOK_SECRET.encode(), body, hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+def _build_repo_map() -> dict[str, str]:
+    """Build a map of GitHub repo full_name (lowercase) → forge project name.
+
+    Scans active projects once. Call at startup and on adopt.
+    """
+    mapping: dict[str, str] = {}
+    active_dir = PROJECTS_DIR / "active"
+    if not active_dir.exists():
+        return mapping
+
+    gh_env = {**os.environ, "PATH": "/home/linuxbrew/.linuxbrew/bin:" + os.environ.get("PATH", "")}
+    for item in active_dir.iterdir():
+        if not item.is_dir() and not item.is_symlink():
+            continue
+        project_path = item.resolve() if item.is_symlink() else item
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=5,
+                cwd=str(project_path), env=gh_env,
+            )
+            if result.returncode == 0:
+                remote_url = result.stdout.strip()
+                # Extract "owner/repo" from URLs like:
+                #   https://github.com/afxjzs/OmniLingo.git
+                #   git@github.com:afxjzs/OmniLingo.git
+                for pattern in ("github.com/", "github.com:"):
+                    if pattern in remote_url:
+                        repo_part = remote_url.split(pattern, 1)[1].removesuffix(".git")
+                        mapping[repo_part.lower()] = item.name
+                        logger.info(f"Webhook repo map: {repo_part} → {item.name}")
+                        break
+        except Exception as e:
+            logger.warning(f"Webhook repo map: failed to read remote for {item.name}: {e}")
+    return mapping
+
+
+# Build repo map at startup — rebuilt when projects are adopted
+_REPO_MAP: dict[str, str] = {}
+
+
+def _get_repo_map() -> dict[str, str]:
+    """Get repo map, building it lazily on first use."""
+    global _REPO_MAP
+    if not _REPO_MAP:
+        _REPO_MAP = _build_repo_map()
+    return _REPO_MAP
+
+
+def _repo_to_project_name(repo_full_name: str) -> str | None:
+    """Map GitHub repo (e.g. 'afxjzs/OmniLingo') to forge project name."""
+    return _get_repo_map().get(repo_full_name.lower())
+
+
+@app.post("/webhooks/github")
+async def github_webhook(request: Request):
+    """Receive GitHub webhook events and trigger orchestrator for new task issues."""
+    body = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    event_type = request.headers.get("X-GitHub-Event", "")
+
+    if not _verify_github_signature(body, signature):
+        logger.warning(f"GitHub webhook: invalid signature (event={event_type})")
+        raise HTTPException(status_code=401, detail="Invalid signature")
+
+    payload = json.loads(body)
+
+    # Ping event — GitHub sends this when webhook is first configured
+    if event_type == "ping":
+        logger.info(f"GitHub webhook: ping received for {payload.get('repository', {}).get('full_name', '?')}")
+        return {"status": "pong"}
+
+    # Issues event — trigger orchestrator when a task issue is opened or labeled
+    if event_type == "issues":
+        action = payload.get("action")
+        issue = payload.get("issue", {})
+        labels = [l["name"] for l in issue.get("labels", [])]
+        repo_name = payload.get("repository", {}).get("full_name", "")
+
+        if action in ("opened", "labeled") and "task" in labels:
+            project_name = _repo_to_project_name(repo_name)
+            if not project_name:
+                logger.warning(f"GitHub webhook: repo {repo_name} not mapped to any forge project")
+                return {"status": "ignored", "reason": "repo not mapped"}
+
+            logger.info(f"GitHub webhook: new task issue #{issue.get('number')} in {repo_name} → triggering orchestrator for {project_name}")
+            try:
+                trigger_orchestrator(project_name)
+                return {"status": "triggered", "project": project_name, "issue": issue.get("number")}
+            except HTTPException as e:
+                logger.warning(f"GitHub webhook: orchestrator trigger failed for {project_name}: {e.detail}")
+                return {"status": "skipped", "reason": e.detail}
+        else:
+            return {"status": "ignored", "reason": f"action={action}, no task label"}
+
+    # All other events — acknowledge but ignore
+    return {"status": "ignored", "event": event_type}
