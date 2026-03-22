@@ -288,52 +288,189 @@ while true; do
     # 3. Mark issue as in-progress
     gh_label "$issue_number" --add-label "in-progress"
 
-    # 4. Spawn worker
-    echo "Spawning worker..."
-    set +e
-    "$SCRIPTS_DIR/forge-worker.sh" "$PROJECT_PATH" "$issue_number" "$model"
-    worker_exit=$?
-    set -e
+    # 4. 3-strike retry loop
+    MAX_ATTEMPTS=3
+    OPUS_MODEL="claude-opus-4-6"
+    attempt=0
+    issue_resolved=false
+    last_error=""
+    attempt_model="$model"
 
-    # 5. Handle result
-    timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    while [[ $attempt -lt $MAX_ATTEMPTS ]]; do
+        attempt=$((attempt + 1))
+        timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    if [[ $worker_exit -eq 99 ]]; then
-        echo "AUTH FAILURE: Claude CLI is not authenticated."
-        gh_label "$issue_number" --remove-label "in-progress"
-        notify_event auth_failure --project "$PROJECT_NAME"
+        # Check if issue was already closed (by a previous attempt's successful merge)
+        issue_state=$(gh issue view "$issue_number" --json state -q .state 2>/dev/null || echo "OPEN")
+        if [[ "$issue_state" == "CLOSED" ]]; then
+            echo "  Issue #$issue_number is already closed — skipping."
+            issue_resolved=true
+            break
+        fi
+
+        # Escalate to Opus on attempt 2+
+        if [[ $attempt -ge 2 ]]; then
+            attempt_model="$OPUS_MODEL"
+        fi
+
+        echo ""
+        echo "  Attempt $attempt/$MAX_ATTEMPTS (model: $attempt_model)"
+
+        # --- Auto-heal before retry (attempts 2+) ---
+        if [[ $attempt -ge 2 ]]; then
+            echo "  Auto-healing before retry..."
+            cd "$PROJECT_PATH"
+            worktree_dir="$PROJECT_PATH/.worktrees/issue-$issue_number"
+            branch_name="issue/$issue_number"
+
+            # Detect failure type and heal
+            if echo "$last_error" | grep -qiE "merge conflict|conflict|CONFLICT"; then
+                echo "    Detected merge conflict — rebasing on latest staging..."
+                if [[ -d "$worktree_dir" ]]; then
+                    cd "$worktree_dir"
+                    git fetch origin staging 2>/dev/null || true
+                    if ! git rebase origin/staging 2>/dev/null; then
+                        git rebase --abort 2>/dev/null || true
+                        echo "    Rebase failed — cleaning worktree for fresh start"
+                        cd "$PROJECT_PATH"
+                        git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir"
+                        git branch -D "$branch_name" 2>/dev/null || true
+                    fi
+                    cd "$PROJECT_PATH"
+                fi
+            elif echo "$last_error" | grep -qiE "worktree|gitdir|not a git repository|lock|index.lock"; then
+                echo "    Detected worktree/git issue — cleaning worktree for fresh start..."
+                cd "$PROJECT_PATH"
+                git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir"
+                git branch -D "$branch_name" 2>/dev/null || true
+            else
+                echo "    CI/build failure — feeding error context to next attempt"
+                # Clean worktree so worker starts fresh but keep error context
+                cd "$PROJECT_PATH"
+                git worktree remove "$worktree_dir" --force 2>/dev/null || rm -rf "$worktree_dir"
+                git branch -D "$branch_name" 2>/dev/null || true
+            fi
+
+            cd "$PROJECT_PATH"
+        fi
+
+        # --- Spawn worker ---
+        echo "  Spawning worker..."
+        WORKER_LOG=$(mktemp)
+        set +e
+        "$SCRIPTS_DIR/forge-worker.sh" "$PROJECT_PATH" "$issue_number" "$attempt_model" \
+            2>&1 | tee "$WORKER_LOG"
+        worker_exit=${PIPESTATUS[0]}
+        set -e
+
+        # Capture last ~50 lines of output for error context
+        last_error=$(tail -50 "$WORKER_LOG" 2>/dev/null || true)
+        rm -f "$WORKER_LOG"
+
+        # --- Auth failure: do NOT count as attempt ---
+        if [[ $worker_exit -eq 99 ]]; then
+            echo "  AUTH FAILURE: Claude CLI is not authenticated."
+            gh_label "$issue_number" --remove-label "in-progress"
+            notify_event auth_failure --project "$PROJECT_NAME"
+            # Post comment about auth failure (not counted)
+            gh issue comment "$issue_number" --body "⚠️ Auth failure during attempt $attempt/$MAX_ATTEMPTS ($attempt_model) — not counted as an attempt. Pipeline stopped." 2>/dev/null || true
+            # Break out of both loops
+            issue_resolved="auth_failure"
+            break
+        fi
+
+        # --- Success ---
+        if [[ $worker_exit -eq 0 ]]; then
+            echo "  Worker completed successfully on attempt $attempt."
+            issue_resolved=true
+            consecutive_failures=0
+            gh_label "$issue_number" --remove-label "in-progress"
+            notify_event worker_done --project "$PROJECT_NAME" --issue "$issue_number" --title "$issue_title"
+
+            # Post success comment
+            gh issue comment "$issue_number" --body "✅ Attempt $attempt/$MAX_ATTEMPTS ($attempt_model): success" 2>/dev/null || true
+
+            echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"done\",\"model\":\"$attempt_model\",\"timestamp\":\"$timestamp\",\"attempts\":$attempt}" \
+                >> "$PROJECT_PATH/.agent/LOG.md"
+
+            # Clean up retry context file on success
+            rm -f "$PROJECT_PATH/.agent/.retry-context-$issue_number"
+            break
+        fi
+
+        # --- Failure: extract error summary ---
+        error_summary="exit code $worker_exit"
+        if [[ $worker_exit -eq 2 ]]; then
+            error_summary="worker flagged for review"
+        fi
+        # Try to extract a more specific error from output
+        specific_error=$(echo "$last_error" | grep -iE "error:|failed:|FATAL:|Error:" | tail -3 | head -3 || true)
+        if [[ -n "$specific_error" ]]; then
+            # Truncate to 200 chars for comment readability
+            error_summary=$(echo "$specific_error" | head -c 200)
+        fi
+
+        # --- Post attempt comment to issue ---
+        gh issue comment "$issue_number" --body "$(cat <<EOF
+Attempt $attempt/$MAX_ATTEMPTS ($attempt_model): ❌ failed
+\`\`\`
+$error_summary
+\`\`\`
+EOF
+)" 2>/dev/null || true
+
+        # --- If not last attempt, notify retry and build context ---
+        if [[ $attempt -lt $MAX_ATTEMPTS ]]; then
+            next_model="$OPUS_MODEL"
+            notify_event retrying --project "$PROJECT_NAME" --issue "$issue_number" --attempt "$attempt"
+
+            # Store error context in a file the worker will read on next attempt
+            ERROR_CONTEXT_FILE="$PROJECT_PATH/.agent/.retry-context-$issue_number"
+            cat > "$ERROR_CONTEXT_FILE" <<EORETRY
+## Previous Attempt Failed (attempt $attempt/$MAX_ATTEMPTS, model: $attempt_model)
+
+The previous attempt failed. Here is the error output — use this to fix the issue:
+
+\`\`\`
+$(echo "$last_error" | tail -30)
+\`\`\`
+
+IMPORTANT: Do NOT repeat the same approach that failed. Analyze the error and try a different strategy.
+EORETRY
+            echo "  Attempt $attempt failed. Retrying with $next_model..."
+        fi
+    done
+
+    # --- All attempts exhausted ---
+    if [[ "$issue_resolved" == "auth_failure" ]]; then
+        # Auth failure already handled above — break the main loop
         break
-    fi
-
-    if [[ $worker_exit -eq 0 ]]; then
-        echo "Worker completed successfully."
-        consecutive_failures=0
-
-        # Remove in-progress label (PR will close the issue)
-        gh_label "$issue_number" --remove-label "in-progress"
-
-        notify_event worker_done --project "$PROJECT_NAME" --issue "$issue_number" --title "$issue_title"
-
-        echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"done\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
-            >> "$PROJECT_PATH/.agent/LOG.md"
-
-    elif [[ $worker_exit -eq 2 ]]; then
-        echo "Worker flagged issue for review."
+    elif [[ "$issue_resolved" != "true" ]]; then
+        timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         consecutive_failures=$((consecutive_failures + 1))
         gh_label "$issue_number" --remove-label "in-progress" --add-label "needs-review"
-        notify_event needs_review --project "$PROJECT_NAME" --issue "$issue_number" --error "worker flagged it"
 
-        echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"needs_review\",\"model\":\"$model\",\"timestamp\":\"$timestamp\"}" \
+        # Post final summary comment
+        gh issue comment "$issue_number" --body "$(cat <<EOF
+→ NEEDS_REVIEW
+
+$MAX_ATTEMPTS attempts exhausted. Last error:
+\`\`\`
+$(echo "$last_error" | tail -20 | head -c 500)
+\`\`\`
+
+Please review and fix manually, then remove the \`needs-review\` label to re-queue.
+EOF
+)" 2>/dev/null || true
+
+        notify_event needs_review --project "$PROJECT_NAME" --issue "$issue_number" \
+            --error "$MAX_ATTEMPTS attempts failed"
+
+        echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"needs_review\",\"model\":\"$attempt_model\",\"timestamp\":\"$timestamp\",\"attempts\":$attempt}" \
             >> "$PROJECT_PATH/.agent/LOG.md"
 
-    else
-        echo "Worker failed (exit code: $worker_exit)."
-        consecutive_failures=$((consecutive_failures + 1))
-        gh_label "$issue_number" --remove-label "in-progress" --add-label "needs-review"
-        notify_event needs_review --project "$PROJECT_NAME" --issue "$issue_number" --error "worker exit $worker_exit"
-
-        echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"failed\",\"model\":\"$model\",\"timestamp\":\"$timestamp\",\"exit_code\":$worker_exit}" \
-            >> "$PROJECT_PATH/.agent/LOG.md"
+        # Clean up retry context file
+        rm -f "$PROJECT_PATH/.agent/.retry-context-$issue_number"
     fi
 
     # 6. Circuit breaker
