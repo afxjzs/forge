@@ -286,6 +286,13 @@ Closes #$ISSUE_NUMBER"
                 echo "CI passed. Auto-merging to staging..."
                 if gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1; then
                     notify_event pr_merged --project "$PROJECT_NAME" --pr "$PR_NUMBER"
+
+                    # Close the issue (GitHub auto-close only works on default branch,
+                    # but PRs target staging, not main)
+                    echo "Closing issue #$ISSUE_NUMBER..."
+                    if ! gh issue close "$ISSUE_NUMBER" 2>&1; then
+                        echo "WARNING: Could not close issue #$ISSUE_NUMBER" >&2
+                    fi
                 else
                     echo "ERROR: Auto-merge failed for PR #$PR_NUMBER" >&2
                     notify_event needs_review --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER" --error "PR #$PR_NUMBER merge FAILED — needs manual merge"
