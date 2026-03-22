@@ -102,7 +102,8 @@ if [[ "$ACTION" == "teardown" ]]; then
     if [[ -f "$STAGING_COMPOSE" ]]; then
         cd "$PROJECT_PATH"
         if ! docker compose -f docker-compose.staging.yml down -v 2>&1; then
-            echo "ERROR: docker compose down failed. Containers may still be running." >&2
+            echo "ERROR: docker compose down failed. Stale containers may still be running and interfere with future deploys." >&2
+            echo "Run 'docker ps' to check for orphaned containers." >&2
         fi
     fi
 
@@ -189,8 +190,11 @@ fi
 
 # --- Tear down existing staging if running ---
 echo "Stopping existing staging (if any)..."
+STALE_CONTAINERS=false
 if ! docker compose -f docker-compose.staging.yml down -v 2>&1; then
-    echo "WARNING: docker compose down failed — old containers may still be running" >&2
+    echo "WARNING: docker compose down failed — stale containers may interfere with new deploy" >&2
+    echo "Check 'docker ps' for orphaned containers if the new deploy fails." >&2
+    STALE_CONTAINERS=true
 fi
 
 # --- Build and start staging from staging branch ---
@@ -205,6 +209,14 @@ git pull origin staging 2>&1
 
 docker compose -f docker-compose.staging.yml build 2>&1
 docker compose -f docker-compose.staging.yml up -d 2>&1
+
+# Verify the new deploy actually started
+if ! docker compose -f docker-compose.staging.yml ps --status running 2>/dev/null | grep -q .; then
+    echo "ERROR: New staging containers are not running after deploy." >&2
+    if $STALE_CONTAINERS; then
+        echo "ERROR: This may be caused by stale containers from the failed teardown." >&2
+    fi
+fi
 
 # Switch back to original branch
 git checkout "$CURRENT_BRANCH" 2>&1

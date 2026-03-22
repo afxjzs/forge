@@ -145,6 +145,7 @@ def read_task_counts(project_path: Path) -> dict:
 
         # If we got any GitHub data, return it
         if any(counts.values()):
+            counts["source"] = "github"
             return counts
     except Exception as e:
         import logging
@@ -156,13 +157,17 @@ def read_task_counts(project_path: Path) -> dict:
     # Fallback to local task files
     tasks_dir = project_path / ".agent" / "tasks"
     if not tasks_dir.exists():
+        counts["source"] = "local_fallback"
         return counts
     for task_file in tasks_dir.glob("task-*.md"):
         content = task_file.read_text()
         for status in counts:
+            if status == "source":
+                continue
             if f"status: {status}" in content:
                 counts[status] += 1
                 break
+    counts["source"] = "local_fallback"
     return counts
 
 
@@ -536,6 +541,13 @@ def trigger_orchestrator(name: str):
             start_new_session=True,
         )
 
+    # Verify the process actually started
+    if process.poll() is not None and process.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"forge-run.sh failed to start (exit code {process.returncode}). Check {log_file}",
+        )
+
     return {"status": "started", "name": name, "pid": process.pid, "open_issues": open_issues, "log": str(log_file)}
 
 
@@ -560,6 +572,13 @@ def trigger_planner(name: str):
             stdout=f,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+        )
+
+    # Verify the process actually started
+    if process.poll() is not None and process.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"forge-plan.sh failed to start (exit code {process.returncode}). Check {log_file}",
         )
 
     return {"status": "started", "name": name, "pid": process.pid, "log": str(log_file)}
@@ -593,6 +612,13 @@ def prd_to_issues(name: str, req: PrdToIssuesRequest):
             stdout=f,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+        )
+
+    # Verify the process actually started
+    if process.poll() is not None and process.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"forge-prd-to-issues.sh failed to start (exit code {process.returncode}). Check {log_file}",
         )
 
     return {"status": "started", "name": name, "pid": process.pid, "log": str(log_file)}
@@ -695,36 +721,34 @@ async def deploy_project(name: str, req: DeployRequest):
             ["git", "rev-parse", "--verify", "staging"],
             cwd=str(project_path),
             capture_output=True,
+            text=True,
         )
 
-        if staging_check.returncode == 0:
-            # Merge staging into main
-            subprocess.run(["git", "checkout", "main"], cwd=str(project_path), capture_output=True)
-            merge_result = subprocess.run(
-                ["git", "merge", "staging", "--no-edit", "-m", "promote: staging → main"],
-                cwd=str(project_path),
-                capture_output=True,
-                text=True,
+        if staging_check.returncode != 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Staging branch does not exist in {name}. Cannot promote to production without a staging branch.",
             )
-            if merge_result.returncode != 0:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Merge staging→main failed: {merge_result.stderr}",
-                )
-            # Push main to remote
-            subprocess.run(
-                ["git", "push", "origin", "main"],
-                cwd=str(project_path),
-                capture_output=True,
+
+        # Merge staging into main
+        subprocess.run(["git", "checkout", "main"], cwd=str(project_path), capture_output=True)
+        merge_result = subprocess.run(
+            ["git", "merge", "staging", "--no-edit", "-m", "promote: staging → main"],
+            cwd=str(project_path),
+            capture_output=True,
+            text=True,
+        )
+        if merge_result.returncode != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Merge staging→main failed: {merge_result.stderr}",
             )
-        else:
-            # No staging branch — just pull main
-            subprocess.run(
-                ["git", "pull", "origin", "main"],
-                cwd=str(project_path),
-                capture_output=True,
-                text=True,
-            )
+        # Push main to remote
+        subprocess.run(
+            ["git", "push", "origin", "main"],
+            cwd=str(project_path),
+            capture_output=True,
+        )
 
         # Call docker-ops to rebuild
         async with httpx.AsyncClient(timeout=300) as client:
