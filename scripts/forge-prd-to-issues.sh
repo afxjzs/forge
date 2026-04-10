@@ -129,6 +129,8 @@ Rules:
 - Keep tasks small and focused — one concern per task
 - Include acceptance criteria that are testable
 - Order tasks by dependency (blockers first, dependents later)
+- IMPORTANT: Each task body must be self-contained enough for an AI agent to implement without needing to read the full PRD. Include specific technical details from the PRD and CLAUDE.md (table schemas, API signatures, config values, library names) directly in each task body. The worker only sees the issue body + CLAUDE.md, not the PRD.
+- IMPORTANT: Do NOT reference files that will be created by other tasks as if they already exist. Instead, describe what the dependency creates so the worker knows the expected interface.
 - Output ONLY the JSON array, nothing else")
 
 if [[ -z "$TASK_JSON" ]]; then
@@ -169,6 +171,9 @@ assess_spec() {
     local llm_questions=""
 
     # Check 1: File/path references exist in codebase
+    # ONLY flag files that should already exist (e.g., referenced as "read this file").
+    # Skip files that the task or its dependencies will CREATE — on a new project,
+    # almost every file reference is a file-to-be-created, not a missing dependency.
     local missing_files
     missing_files=$(python3 - "$body" "$PROJECT_PATH" <<'PYEOF'
 import sys, re, os
@@ -187,10 +192,29 @@ for pattern in patterns:
     for m in re.finditer(pattern, body):
         refs.add(m.group(1))
 
+# Only flag files that appear to be READ dependencies (not files to create).
+# Heuristics: skip if the body says "create", "add", "implement", "write" near the ref,
+# or if the file is under a standard source directory that tasks typically create.
+create_signals = re.compile(r'(?:create|add|implement|write|build|set up|define|new file)', re.IGNORECASE)
+
 missing = []
 for ref in refs:
     full_path = os.path.join(project_path, ref)
     if not os.path.exists(full_path):
+        # Check if the body suggests this file will be CREATED by this task
+        # by looking for create-type verbs near the reference
+        ref_escaped = re.escape(ref)
+        context_pattern = rf'.{{0,100}}{ref_escaped}.{{0,100}}'
+        context_match = re.search(context_pattern, body, re.DOTALL)
+        if context_match and create_signals.search(context_match.group()):
+            continue  # File will be created — not a missing dependency
+        # Also skip if the file is in a standard new-file path
+        if any(ref.startswith(p) for p in ['app/', 'src/', 'lib/', 'tests/', 'scripts/']):
+            continue  # Standard source path — likely being created
+        # Skip bare filenames (no directory) with standard extensions — likely shorthand
+        # for a file the task will create (e.g., "main.py" meaning "app/main.py")
+        if '/' not in ref and ref.endswith(('.py', '.ts', '.js', '.sh', '.yml', '.json', '.toml')):
+            continue  # Bare filename — not a real path reference
         missing.append(ref)
 
 if missing:
@@ -220,6 +244,12 @@ PYEOF
     fi
 
     # Check 4: LLM clarity check (Haiku for speed/cost)
+    # Include CLAUDE.md so the validator knows what decisions are already made
+    local claude_md_context=""
+    [[ -n "$CLAUDE_MD" ]] && claude_md_context="
+## Project Context (CLAUDE.md — decisions already made, do NOT flag these as missing)
+$CLAUDE_MD"
+
     llm_questions=$(claude \
         --model claude-haiku-4-5-20251001 \
         --dangerously-skip-permissions \
@@ -230,8 +260,15 @@ PROJECT: $PROJECT_NAME
 TASK TITLE: $title
 TASK BODY:
 $body
+$claude_md_context
 
 Can an AI coding agent implement this task completely without asking any clarifying questions?
+
+Important context:
+- The agent will have access to CLAUDE.md (shown above) which contains stack decisions, conventions, and architecture. Do NOT flag anything already answered there.
+- This may be a new project where files don't exist yet. Tasks that CREATE new files are fine — only flag if the task needs to READ a file that doesn't exist and isn't created by a dependency.
+- The agent can read library source code and documentation. Do NOT flag questions about library APIs or exception types — the agent can discover these.
+- Only flag genuinely ambiguous requirements where the task could be implemented in multiple incompatible ways and the spec doesn't indicate which.
 
 Reply ONLY in this exact format:
 CLEAR: yes
@@ -240,9 +277,7 @@ or if not clear:
 CLEAR: no
 QUESTIONS:
 - question 1
-- question 2
-
-Be strict. Flag: ambiguous implementation approach, unknown dependencies, unclear scope, missing technical details, underspecified acceptance criteria." 2>/dev/null || echo "CLEAR: yes")
+- question 2" 2>/dev/null || echo "CLEAR: yes")
 
     if echo "$llm_questions" | grep -q "^CLEAR: no"; then
         local q_text

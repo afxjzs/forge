@@ -2,7 +2,10 @@
 
 **Location:** `~/nexus/infra/dev-pipeline/`
 **Purpose:** Reusable multi-agent dev pipeline for any software project. Telegram-driven. Stack-agnostic.
-**Updated:** 2026-03-15
+**Updated:** 2026-04-02
+
+> **Task System:** GitHub Issues are the single source of truth for all tasks.
+> See **[TASK-SYSTEM.md](TASK-SYSTEM.md)** for the complete reference.
 
 ---
 
@@ -23,15 +26,15 @@ forge-api (local HTTP, port 8773)
   │
   ▼
 Orchestrator (Claude Code subprocess, Opus, Ralph Loop)
-  │  reads: spec/features/*.md → builds .agent/tasks/
+  │  reads: GitHub Issues (label: task) — single source of truth
   │  reads: .agent/STEERING.md at every iteration start (mid-run redirect)
   │
   ├─→ Planner-Critic (Sonnet) — adversarial plan review, 2-3 rounds
   ├─→ UI Designer (Opus) — frontend projects only, writes spec/ui-spec.md
   │
-  ├─→ Worker A (worktree: task/001) ─ model tier per task complexity
-  ├─→ Worker B (worktree: task/002)
-  └─→ Worker C (worktree: task/003)
+  ├─→ Worker A (worktree: issue/1) ─ model tier per complexity label
+  ├─→ Worker B (worktree: issue/2)
+  └─→ Worker C (worktree: issue/3)
        │  implements → tests → commits
        ▼
   Worker creates PR (targets staging branch, never main)
@@ -81,7 +84,7 @@ Orchestrator (Claude Code subprocess, Opus, Ralph Loop)
 |--------|---------|-------------------|------------|
 | `main` | Production code | YOU (via "ship" command) | Production |
 | `staging` | Integration + testing | Workers (auto-merge after CI passes) | Staging |
-| `task/task-NNN` | Individual task work | Worker creates, auto-deleted after merge | Never deployed directly |
+| `issue/NNN` | Individual issue work | Worker creates, auto-deleted after merge | Never deployed directly |
 
 **Rules:**
 - Workers ALWAYS PR against `staging`, never `main`
@@ -190,14 +193,12 @@ inception  →  planning  →  active  →  shipped
 │       ├── 001-auth.md
 │       └── 002-dashboard.md
 └── .agent/
-    ├── tasks/                   # Task specs (Ralph Loop pickup queue)
     ├── STEERING.md              # Edit mid-run to redirect orchestrator
+    ├── CONTEXT.md               # Current project state
     ├── LOG.md                   # JSONL append-only activity log
     ├── NOTES.md                 # Live testing notes, UX observations
     ├── ERRORS.md                # Error catalog with prevention rules
-    ├── DECISIONS.md             # ADR-style architecture decisions
-    ├── CONTEXT.md               # Current project state
-    └── scores/                  # Per-task quality + model fit scores
+    └── DECISIONS.md             # ADR-style architecture decisions
 ```
 
 ---
@@ -272,10 +273,10 @@ Three layers — every error propagates upward:
 
 ## Scoring System
 
-Per-task scorecard at `.agent/scores/task-NNN.json`:
-- `reviewer_score` (1-5): quality assessment
-- `model_fit` (`under`/`good`/`over`): was the right model tier used?
-- `security_verdict` (`PASS`/`WARN`/`BLOCK`)
+Quality assessment happens via PR comments and GitHub Issue comments:
+- Reviewer posts verdict (APPROVE/REVISE/REJECT) as PR comment
+- Attempt results logged as issue comments (success/failure per attempt)
+- Model fit tracked in `.agent/LOG.md` JSONL entries
 
 ---
 

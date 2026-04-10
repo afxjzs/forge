@@ -297,22 +297,62 @@ Closes #$ISSUE_NUMBER"
 
             if $CI_PASSED; then
                 echo "CI passed. Auto-merging to staging..."
-                if gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1; then
+
+                # --- Merge with retry ---
+                # gh pr merge can fail transiently (checks still registering, race conditions).
+                # Retry up to 3 times with backoff, then verify the actual merge state.
+                MERGE_OK=false
+                for merge_attempt in 1 2 3; do
+                    if gh pr merge "$PR_NUMBER" --merge --delete-branch 2>&1; then
+                        MERGE_OK=true
+                        break
+                    fi
+                    echo "  Merge attempt $merge_attempt failed — waiting 10s..."
+                    sleep 10
+                done
+
+                # Even if gh pr merge returned non-zero, the merge may have succeeded.
+                # Verify by checking the actual PR state.
+                if ! $MERGE_OK; then
+                    echo "  Merge command failed. Checking actual PR state..."
+                    PR_STATE=$(gh pr view "$PR_NUMBER" --json state -q .state 2>/dev/null || echo "UNKNOWN")
+                    if [[ "$PR_STATE" == "MERGED" ]]; then
+                        echo "  PR #$PR_NUMBER is actually MERGED — proceeding."
+                        MERGE_OK=true
+                    fi
+                fi
+
+                if $MERGE_OK; then
                     notify_event pr_merged --project "$PROJECT_NAME" --pr "$PR_NUMBER"
 
-                    # Close the issue from the project dir (not worktree — branch
-                    # may be deleted by --delete-branch, breaking worktree git context)
+                    # --- Close the issue (with retry) ---
+                    # "Closes #N" only auto-closes on default branch merges.
+                    # Since we merge to staging, we must close explicitly.
                     echo "Closing issue #$ISSUE_NUMBER..."
                     cd "$PROJECT_PATH"
-                    if ! gh issue close "$ISSUE_NUMBER" 2>&1; then
-                        echo "ERROR: Could not close issue #$ISSUE_NUMBER — issue will remain open and may be re-picked by the pipeline" >&2
+                    CLOSE_OK=false
+                    for close_attempt in 1 2 3; do
+                        if gh issue close "$ISSUE_NUMBER" 2>&1; then
+                            CLOSE_OK=true
+                            break
+                        fi
+                        echo "  Close attempt $close_attempt failed — waiting 5s..."
+                        sleep 5
+                    done
+                    if ! $CLOSE_OK; then
+                        echo "CRITICAL: Could not close issue #$ISSUE_NUMBER after 3 attempts — issue will remain open and may be re-picked by the pipeline" >&2
+                        echo "## $(date -u +%Y-%m-%dT%H:%M:%SZ) | ISSUE_CLOSE_FAILURE" >> "$PROJECT_PATH/.agent/ERRORS.md"
+                        echo "**Issue #$ISSUE_NUMBER merged but could not be closed.** Pipeline will re-pick this issue." >> "$PROJECT_PATH/.agent/ERRORS.md"
+                        echo "" >> "$PROJECT_PATH/.agent/ERRORS.md"
                     fi
+
+                    FINAL_STATUS="done"
                 else
-                    echo "ERROR: Auto-merge failed for PR #$PR_NUMBER" >&2
+                    echo "ERROR: PR #$PR_NUMBER merge failed after 3 attempts and is not in MERGED state." >&2
                     notify_event needs_review --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER" --error "PR #$PR_NUMBER merge FAILED — needs manual merge"
                 fi
 
-                # Deploy to staging — rebuild container from staging branch
+                # Deploy to staging (non-blocking — failure here doesn't affect task status)
                 STAGING_COMPOSE="$PROJECT_PATH/docker-compose.staging.yml"
                 if [[ -f "$STAGING_COMPOSE" ]]; then
                     echo "Deploying to staging..."
@@ -322,14 +362,12 @@ Closes #$ISSUE_NUMBER"
                         echo "Staging deployed."
                         notify_event staging_deployed --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER"
                     else
-                        echo "ERROR: Staging deploy failed" >&2
+                        echo "WARNING: Staging deploy failed — task is still done, deploy needs manual attention." >&2
                         notify_event staging_deploy_failed --project "$PROJECT_NAME" --issue "$ISSUE_NUMBER"
                     fi
                 else
                     echo "No docker-compose.staging.yml — skipping staging deploy."
                 fi
-
-                FINAL_STATUS="done"
             fi
         fi
     else

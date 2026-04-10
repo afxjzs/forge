@@ -2,7 +2,7 @@
 
 **Runtime:** Claude Code (subprocess, spawned by forge-run.sh)
 **Model:** Opus
-**Role:** Ralph Loop task orchestrator — plans, routes, manages merge queue
+**Role:** Ralph Loop task orchestrator — picks GitHub Issues, spawns workers, manages merge queue
 
 ## Error Handling — Mandatory
 - NEVER suppress errors silently. If a subprocess, API call, or file operation fails, surface it immediately.
@@ -12,74 +12,50 @@
 
 ---
 
+## Task System
+
+**GitHub Issues are the single source of truth.** See `TASK-SYSTEM.md` for the complete reference.
+
+- Tasks are GitHub Issues with the `task` label
+- Priority: `P0` > `P1` > `P2` > unlabeled
+- Complexity: `mechanical` (Haiku), `standard` (Sonnet), `architecture` (Opus)
+- Blocking: "Blocked by #N" in issue body
+- State: `in-progress` label while worker is running, `needs-review` after 3 failures
+
+---
+
 ## Core Loop (Ralph Loop)
 
-Each iteration runs with a **fresh context window**. State lives in files, not in context.
+Each iteration runs with a **fresh context window**. State lives in files and GitHub Issues, not in context.
 
 ```
 EVERY ITERATION:
   1. Read .agent/STEERING.md              ← human redirect? obey it.
   2. Read .agent/CONTEXT.md               ← current project state
-  3. Read .agent/tasks/                   ← scan for queued/needs_review tasks
-  4. Pick highest-priority unclaimed task
-  5. Assign model tier based on complexity field
-  6. Spawn worker via forge-worker.sh <task-id> <model>
-  7. Wait for worker result
-  8. On success: run security scan (forge-security-scan.sh)
-  9. Security PASS/WARN: merge worker branch, update task status
-  10. Security BLOCK: mark needs_review, write findings to .agent/ERRORS.md
-  11. On worker failure: mark needs_review, write to .agent/ERRORS.md
-  12. Append to .agent/LOG.md
-  11. Update .agent/CONTEXT.md
-  12. Loop
+  3. Query GitHub: gh issue list --label task --state open
+  4. Sort by priority, filter out blocked and in-progress issues
+  5. Pick highest-priority unblocked issue
+  6. Determine model tier from complexity label
+  7. Spawn worker via forge-worker.sh <project-path> <issue-number> <model>
+  8. Wait for worker result (3-strike retry with Opus escalation)
+  9. On success: issue auto-closes via PR merge
+  10. On failure after 3 attempts: add 'needs-review' label, post error comment
+  11. Append to .agent/LOG.md
+  12. Update .agent/CONTEXT.md
+  13. Loop
 ```
 
 **Stopping conditions:**
-- No more queued tasks
+- No more open task issues with met dependencies
 - STEERING.md says "stop" or "pause"
 - Circuit breaker: 3 consecutive failures → stop and alert PM
 
 ---
 
-## Task Spec Generation
-
-When building the task queue from `spec/features/NNN-*.md`:
-
-Each task file at `.agent/tasks/task-NNN.md`:
-
-```markdown
-# task-NNN: [short title]
-
-status: queued
-complexity: standard          # mechanical | standard | architecture
-priority: 1                   # lower = higher priority
-depends_on: []                # task IDs that must complete first
-feature: 001-auth             # which feature spec this implements
-
-## Description
-[What needs to be built — precise, not vague]
-
-## Success Criteria
-- [ ] [measurable outcome 1]
-- [ ] [measurable outcome 2]
-- [ ] Tests pass
-
-## Context
-- Read: [specific files worker needs]
-- Reference: [spec sections, API docs]
-
-## Unknowns
-- [anything that needs clarification before starting]
-```
-
-**Before finalizing tasks:** Run adversarial plan review. Spawn Planner-Critic agent to review task specs. Iterate 2-3 rounds until Critic approves.
-
----
-
 ## Model Tier Assignment
 
-| Task complexity | Model | Examples |
-|----------------|-------|---------|
+| Complexity label | Model | Examples |
+|-----------------|-------|---------|
 | `mechanical` | Haiku | Rename files, add boilerplate, format code, copy-paste migrations |
 | `standard` | Sonnet | Feature implementation, bug fixes, CRUD endpoints, component building |
 | `architecture` | Opus | New abstractions, system design, auth flows, state management patterns |
@@ -88,7 +64,6 @@ feature: 001-auth             # which feature spec this implements
 - If task touches >5 files across >2 directories → likely `standard` or `architecture`
 - If task requires understanding existing patterns to extend → `standard`
 - If task creates new patterns others will follow → `architecture`
-- If task is "do X like Y but for Z" → `mechanical` or `standard`
 - When in doubt, go one tier up — retries from under-allocation cost more than over-allocation
 
 ---
@@ -96,40 +71,42 @@ feature: 001-auth             # which feature spec this implements
 ## Worker Spawn Protocol
 
 ```bash
-forge-worker.sh <project-path> <task-id> <model>
-# Creates a git worktree at .worktrees/task-<id>
-# Starts Claude Code with the worker AGENT.md + project CLAUDE.md
-# Worker works in isolation, commits to branch task/<id>
-# Returns exit code: 0=success, 1=failure, 2=needs_review
+forge-worker.sh <project-path> <issue-number> <model>
+# Reads issue body from GitHub
+# Creates a git worktree at .worktrees/issue-<number>
+# Starts Claude Code with worker AGENT.md + project CLAUDE.md
+# Worker works in isolation, commits to branch issue/<number>
+# Creates PR targeting staging with "Closes #<number>"
+# Returns exit code: 0=success, 1=failure, 2=needs_review, 99=auth failure
 ```
 
 ---
 
-## Merge Queue
+## Retry Logic (3-Strike)
 
-Workers complete tasks on their own branches. Orchestrator serializes merges:
+| Attempt | Model | Behavior |
+|---------|-------|----------|
+| 1 | Assigned tier | Normal attempt |
+| 2 | Opus (escalated) | Previous error context fed to worker |
+| 3 | Opus | Previous error context fed to worker |
+| All fail | — | `needs-review` label + error summary comment on issue |
 
-1. Worker branch ready → run full test suite on the branch
-2. Tests pass → merge into staging branch
-3. Tests fail → mark task `needs_review`, log to ERRORS.md
-4. Conflict with another branch → resolve (Orchestrator has full project context)
-
-Never merge two branches simultaneously. One at a time, always.
+Auth failures (exit 99) do NOT count as attempts — pipeline stops immediately.
 
 ---
 
 ## STEERING.md Protocol
 
-Read STEERING.md at the START of every iteration. This is how the human redirects the orchestrator mid-run without killing it.
+Read STEERING.md at the START of every iteration. This is how the human redirects the orchestrator mid-run.
 
 | STEERING.md content | Action |
 |---------------------|--------|
 | Empty or "continue" | Proceed normally |
 | "stop" | Finish current task, then stop loop |
 | "pause" | Finish current task, stop, alert PM |
-| "reprioritize: task-005 first" | Move task-005 to top of queue |
-| "skip: task-003" | Mark task-003 as skipped |
-| "focus: only auth tasks" | Only pick up tasks matching this filter |
+| "reprioritize: #5 first" | Process issue #5 next |
+| "skip: #3" | Skip issue #3 this run |
+| "focus: only auth tasks" | Only pick up issues matching this filter |
 | Custom instructions | Follow them, then resume normal operation |
 
 ---
@@ -140,7 +117,7 @@ After every iteration, write:
 
 | File | What to write |
 |------|---------------|
-| `.agent/LOG.md` | JSONL entry: task_id, status, model, timestamp, duration, notes |
+| `.agent/LOG.md` | JSONL entry: issue number, status, model, timestamp, duration, notes |
 | `.agent/CONTEXT.md` | Updated current state: what's done, what's next, any blockers |
 | `.agent/ERRORS.md` | If failure: root cause + prevention rule |
 | `.agent/DECISIONS.md` | If architectural choice was made: ADR entry |
@@ -152,7 +129,7 @@ After every iteration, write:
 
 - Never skip reading STEERING.md — the human may need to redirect you
 - Never assign Haiku to architecture tasks to save cost
-- Never merge without passing tests
 - Never continue after 3 consecutive failures — stop and escalate
 - Never lose state — if context is getting large, flush to files before it compacts
 - Never modify STEERING.md — it's the human's file, read-only for you
+- Never create `.agent/tasks/` files — tasks are GitHub Issues

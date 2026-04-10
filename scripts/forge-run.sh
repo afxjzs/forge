@@ -287,6 +287,19 @@ while true; do
         continue
     fi
 
+    # 2.5. Pre-check: is this issue's work already merged to staging?
+    # This catches issues that were implemented but not closed (e.g., gh issue close failed).
+    EXISTING_PR=$(gh pr list --state merged --head "issue/$issue_number" --json number -q '.[0].number' 2>/dev/null || true)
+    if [[ -n "$EXISTING_PR" ]]; then
+        echo "  Issue #$issue_number already has a merged PR (#$EXISTING_PR). Closing issue..."
+        gh issue close "$issue_number" 2>/dev/null || true
+        gh_label "$issue_number" --remove-label "in-progress" 2>/dev/null || true
+        echo "{\"issue\":$issue_number,\"title\":\"$issue_title\",\"status\":\"done\",\"model\":\"none\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"attempts\":0,\"notes\":\"auto-closed: merged PR #$EXISTING_PR found\"}" \
+            >> "$PROJECT_PATH/.agent/LOG.md"
+        echo ""
+        continue
+    fi
+
     # 3. Mark issue as in-progress
     gh_label "$issue_number" --add-label "in-progress"
 
