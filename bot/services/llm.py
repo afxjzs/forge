@@ -89,7 +89,9 @@ If action is "skip", set duplicate_of to the issue number."""
         result.setdefault("comment", None)
         return result
     except json.JSONDecodeError:
-        logger.warning(f"Claude returned unparseable JSON for classify_note, defaulting to 'create ux issue'. Raw response: {text[:200]}")
+        logger.warning(
+            f"Claude returned unparseable JSON for classify_note, defaulting to 'create ux issue'. Raw response: {text[:200]}"
+        )
         return {"action": "create", "category": "ux", "summary": note[:100], "duplicate_of": None, "comment": None}
 
 

@@ -12,6 +12,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from config import CHAT_ID
+from services.claude_relay import ClaudeCodeRelay, get_relay, remove_relay, set_relay
 from services.forge_api import ForgeAPIError, api
 from services.formatting import truncate
 from services.llm import synthesize_specs
@@ -69,7 +70,30 @@ async def cmd_plan_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply(update, f"Already in {current.mode.value} mode for {current.project}. Use /done first.", current)
         return
 
+    try:
+        data = await api.project_status(project)
+        project_path = data.get("path", "")
+    except ForgeAPIError as e:
+        logger.error(f"Plan mode: forge-api failed for {project}: {e}")
+        project_path = ""
+
     session = enter_mode(chat_id, Mode.PLANNING, project)
+    session.sub = SubSession(
+        type=SessionType.RESEARCH,
+        context={"project_path": project_path},
+    )
+    set_session(chat_id, session)
+
+    async def _heartbeat(msg: str):
+        await update.message.reply_text(msg)
+
+    relay = ClaudeCodeRelay(
+        project_path=project_path,
+        mode="planning",
+        send_heartbeat=_heartbeat,
+    )
+    set_relay(chat_id, relay)
+
     await _reply(
         update,
         f"Planning mode for **{project}**. Send messages to discuss architecture, features, and specs. /done to exit.",
@@ -132,7 +156,30 @@ async def cmd_review_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply(update, f"Already in {current.mode.value} mode for {current.project}. Use /done first.", current)
         return
 
+    try:
+        data = await api.project_status(project)
+        project_path = data.get("path", "")
+    except ForgeAPIError as e:
+        logger.error(f"Review mode: forge-api failed for {project}: {e}")
+        project_path = ""
+
     session = enter_mode(chat_id, Mode.REVIEW, project)
+    session.sub = SubSession(
+        type=SessionType.RESEARCH,
+        context={"project_path": project_path},
+    )
+    set_session(chat_id, session)
+
+    async def _heartbeat(msg: str):
+        await update.message.reply_text(msg)
+
+    relay = ClaudeCodeRelay(
+        project_path=project_path,
+        mode="review",
+        send_heartbeat=_heartbeat,
+    )
+    set_relay(chat_id, relay)
+
     await _reply(
         update,
         f"Review mode for **{project}**. Send messages to discuss PRs, code quality, and deployment readiness. /done to exit.",
@@ -158,10 +205,18 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Mode-specific wrapup
     if session.mode == Mode.TESTING and session.sub and session.sub.type == SessionType.LIVE_NOTES:
         await _wrapup_testing(update, session)
-    elif session.mode == Mode.PLANNING:
-        await _reply(update, f"Planning session for **{session.project}** ended.", session)
-    elif session.mode == Mode.REVIEW:
-        await _reply(update, f"Review session for **{session.project}** ended.", session)
+    elif session.mode in (Mode.PLANNING, Mode.REVIEW):
+        relay = get_relay(chat_id)
+        if relay:
+            await _reply(update, "Wrapping up session...", session)
+            try:
+                summary = await relay.wrapup()
+                await _reply(update, summary[:4000], session)
+            except Exception as e:
+                logger.error(f"Wrapup error: {e}")
+            await remove_relay(chat_id)
+        mode_label = "Planning" if session.mode == Mode.PLANNING else "Review"
+        await _reply(update, f"{mode_label} session for **{session.project}** ended.", session)
 
     clear_session(chat_id)
 
@@ -184,7 +239,7 @@ async def _wrapup_testing(update: Update, session: ModalSession):
             logger.error(f"Auto-kick failed for {project}: {e}")
             await _reply(update, f"⚠ Auto-kick failed: {e}\nRun /kick {project} manually.", session)
     else:
-        await _reply(update, f"Done. No issues created.", session)
+        await _reply(update, "Done. No issues created.", session)
 
 
 # ---- New Project Interview (runs in default mode) ----
@@ -421,14 +476,24 @@ async def _create_testing_issue(
                 with open(notes_file, "a") as f:
                     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
                     f.write(f"\n- [{now}] {note_type}: {text}\n")
-                await _reply(update, "⚠ GitHub Issue creation FAILED — saved to NOTES.md instead. Run `gh auth status` to debug.", session)
+                await _reply(
+                    update,
+                    "⚠ GitHub Issue creation FAILED — saved to NOTES.md instead. Run `gh auth status` to debug.",
+                    session,
+                )
                 logger.error(f"gh issue create failed for [{note_type}]: {text[:100]}... — saved to {notes_file}")
             except Exception as e:
                 logger.error(f"CRITICAL: Failed to save note to {notes_file}: {e}")
-                await _reply(update, f"⚠ GitHub Issue creation FAILED and local save FAILED: {e}\nYour note: {text}", session)
+                await _reply(
+                    update, f"⚠ GitHub Issue creation FAILED and local save FAILED: {e}\nYour note: {text}", session
+                )
         else:
-            logger.error(f"CRITICAL: gh issue create failed AND no project_path — note lost: [{note_type}] {text[:200]}")
-            await _reply(update, f"⚠ GitHub Issue creation FAILED (no project path). Your note was NOT saved:\n{text}", session)
+            logger.error(
+                f"CRITICAL: gh issue create failed AND no project_path — note lost: [{note_type}] {text[:200]}"
+            )
+            await _reply(
+                update, f"⚠ GitHub Issue creation FAILED (no project path). Your note was NOT saved:\n{text}", session
+            )
 
 
 async def _handle_live_note(update: Update, session: ModalSession):
@@ -468,7 +533,8 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _check_auth(update):
         return
 
-    session = get_session(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+    session = get_session(chat_id)
 
     # Default mode with no sub-session — nothing to route to
     if session.is_default() and session.sub is None:
@@ -486,11 +552,29 @@ async def route_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Mode-specific free-form routing (planning, review)
     if session.mode == Mode.PLANNING:
-        await _reply(update, "Planning mode active. Claude Code relay coming soon. Use /done to exit.", session)
+        relay = get_relay(chat_id)
+        if not relay:
+            await _reply(update, "Relay not initialized. Use /done and try again.", session)
+            return
+        try:
+            response = await relay.send_message(update.message.text)
+            await _reply(update, response[:4000], session)
+        except Exception as e:
+            logger.error(f"Planning relay error: {e}")
+            await _reply(update, f"Claude error: {e}", session)
         return
 
     if session.mode == Mode.REVIEW:
-        await _reply(update, "Review mode active. Claude Code relay coming soon. Use /done to exit.", session)
+        relay = get_relay(chat_id)
+        if not relay:
+            await _reply(update, "Relay not initialized. Use /done and try again.", session)
+            return
+        try:
+            response = await relay.send_message(update.message.text)
+            await _reply(update, response[:4000], session)
+        except Exception as e:
+            logger.error(f"Review relay error: {e}")
+            await _reply(update, f"Claude error: {e}", session)
         return
 
     await _reply(update, "Unknown session state. Use /done to exit, /help for commands.", session)
