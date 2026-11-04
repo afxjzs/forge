@@ -32,13 +32,11 @@ from handlers.conversations import (
     route_message,
     start_new_project,
 )
+from log_setup import configure_logging
 from notify_endpoint import notify_app
 from services.claude_relay import cleanup_all_relays
 
-logging.basicConfig(
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    level=logging.INFO,
-)
+configure_logging(BOT_TOKEN)
 log = logging.getLogger("forge-bot")
 
 
