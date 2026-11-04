@@ -1109,9 +1109,7 @@ def _verify_github_signature(body: bytes, signature: str) -> bool:
     if not GITHUB_WEBHOOK_SECRET:
         logger.error("GITHUB_WEBHOOK_SECRET not configured — rejecting webhook")
         return False
-    expected = "sha256=" + hmac.new(
-        GITHUB_WEBHOOK_SECRET.encode(), body, hashlib.sha256
-    ).hexdigest()
+    expected = "sha256=" + hmac.new(GITHUB_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, expected)
 
 
@@ -1133,8 +1131,11 @@ def _build_repo_map() -> dict[str, str]:
         try:
             result = subprocess.run(
                 ["git", "remote", "get-url", "origin"],
-                capture_output=True, text=True, timeout=5,
-                cwd=str(project_path), env=gh_env,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=str(project_path),
+                env=gh_env,
             )
             if result.returncode == 0:
                 remote_url = result.stdout.strip()
@@ -1191,7 +1192,7 @@ async def github_webhook(request: Request):
     if event_type == "issues":
         action = payload.get("action")
         issue = payload.get("issue", {})
-        labels = [l["name"] for l in issue.get("labels", [])]
+        labels = [label["name"] for label in issue.get("labels", [])]
         repo_name = payload.get("repository", {}).get("full_name", "")
 
         if action in ("opened", "labeled") and "task" in labels:
@@ -1200,7 +1201,9 @@ async def github_webhook(request: Request):
                 logger.warning(f"GitHub webhook: repo {repo_name} not mapped to any forge project")
                 return {"status": "ignored", "reason": "repo not mapped"}
 
-            logger.info(f"GitHub webhook: new task issue #{issue.get('number')} in {repo_name} → triggering orchestrator for {project_name}")
+            logger.info(
+                f"GitHub webhook: new task issue #{issue.get('number')} in {repo_name} → triggering orchestrator for {project_name}"
+            )
             try:
                 trigger_orchestrator(project_name)
                 return {"status": "triggered", "project": project_name, "issue": issue.get("number")}
@@ -1229,10 +1232,15 @@ async def github_webhook(request: Request):
                 # Pull latest staging
                 pull_result = subprocess.run(
                     ["git", "pull", "origin", "staging"],
-                    cwd=str(project_path), capture_output=True, text=True, timeout=60,
+                    cwd=str(project_path),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
                 )
                 if pull_result.returncode != 0:
-                    logger.error(f"Staging auto-deploy: git pull failed for {project_name}: {pull_result.stderr.strip()}")
+                    logger.error(
+                        f"Staging auto-deploy: git pull failed for {project_name}: {pull_result.stderr.strip()}"
+                    )
                     return {"status": "error", "reason": f"git pull failed: {pull_result.stderr.strip()[:200]}"}
 
                 # Rebuild staging container
@@ -1240,12 +1248,19 @@ async def github_webhook(request: Request):
                 if staging_compose.exists():
                     deploy_result = subprocess.run(
                         ["docker", "compose", "-f", "docker-compose.staging.yml", "up", "-d", "--build"],
-                        cwd=str(project_path), capture_output=True, text=True, timeout=300,
+                        cwd=str(project_path),
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
                     )
                     if deploy_result.returncode != 0:
-                        logger.error(f"Staging auto-deploy: docker compose failed for {project_name}: {deploy_result.stderr.strip()[:300]}")
+                        logger.error(
+                            f"Staging auto-deploy: docker compose failed for {project_name}: {deploy_result.stderr.strip()[:300]}"
+                        )
                         # Notify via forge-bot
-                        _notify_telegram(f"⚠ Staging deploy FAILED for {project_name}:\n{deploy_result.stderr.strip()[:200]}")
+                        _notify_telegram(
+                            f"⚠ Staging deploy FAILED for {project_name}:\n{deploy_result.stderr.strip()[:200]}"
+                        )
                         return {"status": "error", "reason": "docker compose failed"}
 
                     commit = payload.get("head_commit", {}).get("message", "unknown")[:80]
