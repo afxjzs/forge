@@ -298,7 +298,11 @@ class TestHandleLiveNote:
 
 
 class TestWrapupTesting:
-    """Test the /done summary format in testing mode."""
+    """/done in testing mode: summarize the notes, then start workers on them.
+
+    Since 944cf34 (2026-03-22), /done starts the orchestrator itself when any
+    issues were filed, instead of telling the user to run /kick.
+    """
 
     def _make_update(self, chat_id: int = 12345):
         update = MagicMock()
@@ -307,42 +311,62 @@ class TestWrapupTesting:
         update.message.reply_text = AsyncMock()
         return update
 
-    @pytest.mark.asyncio
-    async def test_done_summary_format(self):
-        update = self._make_update()
-        session = ModalSession(mode=Mode.TESTING, project="myapp")
+    def _replies(self, update) -> list[str]:
+        return [c.args[0] for c in update.message.reply_text.call_args_list]
+
+    def _session(self, project: str, bugs: int = 0, features: int = 0) -> ModalSession:
+        session = ModalSession(mode=Mode.TESTING, project=project)
         session.sub = SubSession(type=SessionType.LIVE_NOTES)
-        session.sub.notes_captured["bug"] = 3
-        session.sub.notes_captured["feature"] = 2
-
-        await conversations._wrapup_testing(update, session)
-
-        reply_text = update.message.reply_text.call_args[0][0]
-        assert "3 bugs" in reply_text
-        assert "2 features" in reply_text
-        assert "/kick myapp" in reply_text
+        if bugs:
+            session.sub.notes_captured["bug"] = bugs
+        if features:
+            session.sub.notes_captured["feature"] = features
+        return session
 
     @pytest.mark.asyncio
-    async def test_done_summary_zero_counts(self):
+    async def test_done_reports_counts_and_starts_workers(self):
         update = self._make_update()
-        session = ModalSession(mode=Mode.TESTING, project="proj")
-        session.sub = SubSession(type=SessionType.LIVE_NOTES)
+        forge = MagicMock(run=AsyncMock(return_value={"open_issues": 5}))
 
-        await conversations._wrapup_testing(update, session)
+        with patch.object(conversations, "api", forge):
+            await conversations._wrapup_testing(update, self._session("myapp", bugs=3, features=2))
 
-        reply_text = update.message.reply_text.call_args[0][0]
-        assert "0 bugs" in reply_text
-        assert "0 features" in reply_text
-        assert "/kick proj" in reply_text
+        replies = self._replies(update)
+        assert any("3 bugs" in r and "2 features" in r for r in replies)
+        forge.run.assert_awaited_once_with("myapp")
+        assert "Orchestrator started" in replies[-1]
+        assert "5 open issues" in replies[-1]
 
     @pytest.mark.asyncio
-    async def test_done_includes_mode_tag(self):
+    async def test_done_tells_user_to_kick_manually_when_starting_workers_fails(self):
         update = self._make_update()
-        session = ModalSession(mode=Mode.TESTING, project="myapp")
-        session.sub = SubSession(type=SessionType.LIVE_NOTES)
-        session.sub.notes_captured["bug"] = 1
+        forge = MagicMock(run=AsyncMock(side_effect=RuntimeError("forge-api unreachable")))
 
-        await conversations._wrapup_testing(update, session)
+        with patch.object(conversations, "api", forge):
+            await conversations._wrapup_testing(update, self._session("myapp", bugs=1))
 
-        reply_text = update.message.reply_text.call_args[0][0]
-        assert "[T]" in reply_text
+        last = self._replies(update)[-1]
+        assert "failed" in last.lower()
+        assert "forge-api unreachable" in last
+        assert "/kick myapp" in last
+
+    @pytest.mark.asyncio
+    async def test_done_with_no_notes_starts_no_workers(self):
+        update = self._make_update()
+        forge = MagicMock(run=AsyncMock())
+
+        with patch.object(conversations, "api", forge):
+            await conversations._wrapup_testing(update, self._session("proj"))
+
+        assert "No issues created" in self._replies(update)[-1]
+        forge.run.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_done_replies_carry_the_testing_mode_tag(self):
+        update = self._make_update()
+        forge = MagicMock(run=AsyncMock(return_value={"open_issues": 1}))
+
+        with patch.object(conversations, "api", forge):
+            await conversations._wrapup_testing(update, self._session("myapp", bugs=1))
+
+        assert all(r.startswith("[T]") for r in self._replies(update))
